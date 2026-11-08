@@ -19,6 +19,8 @@
 # 环境变量：
 #   QQ_CRFIX_QQ               QQ 的启动命令（默认先找 PATH 里的 linuxqq，再找 /opt/QQ/qq）
 #   QQ_CRFIX_LOG              日志文件（默认 $XDG_RUNTIME_DIR/qq-crfix.log）
+#   QQ_CRFIX_WAYLAND_DISPLAY  显式指定给 QQ 的 WAYLAND_DISPLAY（连不上就直接报错，不自动回退）
+#   QQ_CRFIX_IGNORE_WAYLAND_CHECK=1  跳过启动前的 Wayland socket 可连接性检查（排查用）
 #   QQ_CRFIX_IME_DISABLE=1    不加 --enable-wayland-ime / --wayland-text-input-version=1（排查用）
 #   QQ_WL_NATIVE_DISABLE=1    关闭屏幕共享修复（排查问题用）
 #   QQ_WL_DMABUF=off|first    合成器只给 DMA-BUF 时共享画面用 LINEAR DMA-BUF；
@@ -56,6 +58,87 @@ keep_crash_records() {
         cp -p "$f" "$CRASH_KEEP/" 2>/dev/null
     done
     ls -1t "$CRASH_KEEP"/tomb_*.txt 2>/dev/null | tail -n +21 | xargs -r rm -f
+}
+
+# ---------------------------------------------------------------------------
+# 启动前先确认 Wayland display 真的能连上
+#
+# Crostini 里 $XDG_RUNTIME_DIR/wayland-0 会变成一个「空壳」：socket 文件还在，
+# 但 Sommelier 监听的是已被 unlink 的旧 inode（同名 socket 被别的合成器占用过，
+# 或 service 重启时 socket 文件被覆盖）。此时 connect() 返回 ECONNREFUSED，
+# QQ 的 Ozone/Wayland 初始化失败，随后在退出路径上解引用空指针，直接 SIGSEGV
+# （崩溃点 qq+0x2a8d06e；关掉全部四个注入库照样崩，与本项目无关）。
+# 所以启动前真的连一次：连不上就换一个能连的 display；一个都没有就明确报错，
+# 绝不把 QQ 送进段错误。
+# ---------------------------------------------------------------------------
+wayland_socket_path() {
+    local name="${1:-}"
+    [[ -n "$name" ]] || return 1
+    if [[ "$name" == /* ]]; then
+        printf '%s\n' "$name"
+    else
+        printf '%s\n' "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/$name"
+    fi
+}
+
+wayland_display_ok() {
+    local name="${1:-}" path
+    path=$(wayland_socket_path "$name") || return 1
+    [[ -S "$path" ]] || return 1
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); s.connect(sys.argv[1]); s.close()' \
+            "$path" >/dev/null 2>&1
+        return $?
+    fi
+    # 没有 python3 时，用同样能真的 connect 一次的工具兜底。注意不能拿 stat 的文件
+    # inode 去比 ss 的 socket inode：两者是不同编号空间，永远不相等，会误判成全不可用。
+    if command -v socat >/dev/null 2>&1; then
+        socat -u /dev/null "UNIX-CONNECT:$path" >/dev/null 2>&1
+        return $?
+    fi
+    if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q -- '-U'; then
+        nc -U -w 1 "$path" </dev/null >/dev/null 2>&1
+        return $?
+    fi
+    return 0  # 没有能连 Unix socket 的工具：不拦截，保持原行为
+}
+
+# 选出可连接的 display，写入 WL_CHOSEN / WL_NOTE；一个都连不上返回 1。
+WL_CHOSEN=""
+WL_NOTE=""
+select_wayland_display() {
+    local forced="${QQ_CRFIX_WAYLAND_DISPLAY:-}" cur="${WAYLAND_DISPLAY:-}"
+    local runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    local -a cand=()
+    local -A seen=()
+    local f name
+    WL_CHOSEN=""
+    WL_NOTE=""
+
+    if [[ -n "$forced" ]]; then
+        wayland_display_ok "$forced" || { WL_NOTE="QQ_CRFIX_WAYLAND_DISPLAY=$forced 连不上"; return 1; }
+        WL_CHOSEN="$forced"
+        [[ "$forced" != "$cur" ]] && WL_NOTE="按 QQ_CRFIX_WAYLAND_DISPLAY 指定 $forced"
+        return 0
+    fi
+
+    [[ -n "$cur" ]] && cand+=("$cur")
+    cand+=(wayland-0 wayland-1)
+    for f in "$runtime"/wayland-*; do
+        [[ -S "$f" ]] && cand+=("${f##*/}")
+    done
+
+    for name in ${cand[@]+"${cand[@]}"}; do
+        [[ -n "${seen[$name]:-}" ]] && continue
+        seen[$name]=1
+        if wayland_display_ok "$name"; then
+            WL_CHOSEN="$name"
+            [[ "$name" != "$cur" ]] && WL_NOTE="${cur:-WAYLAND_DISPLAY 未设置} 不可连接，已自动改用 $name"
+            return 0
+        fi
+    done
+    WL_NOTE="${cur:-WAYLAND_DISPLAY 未设置} 连不上，且 $runtime 下没有可连接的 wayland-* socket"
+    return 1
 }
 
 # 优先用 QQ 包自己的 linuxqq 命令（linuxqq 读 qq-flags.conf，linuxqq-appimage 启动 AppImage）。
@@ -449,7 +532,13 @@ doctor() {
         fi
     fi
     [[ -r "$BORDERFIX_LIB" ]] && pass "窗口修补（共享边框/截图覆盖层）: $BORDERFIX_LIB" || note "找不到 $BORDERFIX_LIB（共享边框会变成窗口、截图覆盖层不平铺）"
-    [[ -n "${WAYLAND_DISPLAY:-}" ]] && pass "Wayland 会话: $WAYLAND_DISPLAY" || note "WAYLAND_DISPLAY 为空，不在 Wayland 会话里？"
+    if [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+        note "Wayland 会话: WAYLAND_DISPLAY 为空，不在 Wayland 会话里？"
+    elif wayland_display_ok "$WAYLAND_DISPLAY"; then
+        pass "Wayland 会话: $WAYLAND_DISPLAY（socket 可连接）"
+    else
+        bad "Wayland 会话: $WAYLAND_DISPLAY 的 socket 连不上（QQ 会段错误，详见下方会话段）"
+    fi
     [[ -n "${DISPLAY:-}" ]] && pass "XWayland: $DISPLAY" || bad "DISPLAY 为空：QQ 的界面与剪贴板仍需要 XWayland"
     # Crostini：ChromeOS 输入法（crosim）只认 text-input-v1，而 Chromium/Electron 默认要 v3。
     if [[ -n "${QQ_CRFIX_IME_DISABLE:-}" && "${QQ_CRFIX_IME_DISABLE}" != 0 ]]; then
@@ -530,13 +619,24 @@ doctor() {
 
     echo
     echo "[Crostini / Wayland 会话]"
-    local st="${XDG_SESSION_TYPE:-未知}"
-    if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
-        pass "会话: ${WAYLAND_DISPLAY}（XDG_SESSION_TYPE=$st；启动器会给 QQ 设 x11）"
+    local st="${XDG_SESSION_TYPE:-未知}" cur="${WAYLAND_DISPLAY:-}" alt="" f
+    if [[ -n "$cur" ]] && wayland_display_ok "$cur"; then
+        pass "会话: ${cur} 可连接（XDG_SESSION_TYPE=$st；启动器会给 QQ 设 x11）"
+    elif [[ -n "$cur" ]]; then
+        bad "会话: ${cur} 的 socket 连不上（文件与 Sommelier 监听的 socket 不一致？），QQ 会直接 SIGSEGV"
+        for f in "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/wayland-*; do
+            [[ -S "$f" ]] || continue
+            if wayland_display_ok "${f##*/}"; then alt="${f##*/}"; break; fi
+        done
+        if [[ -n "$alt" ]]; then
+            note "启动器会自动改用 $alt；也可执行 systemctl --user restart sommelier@0.service 修复 $cur"
+        else
+            note "没有其它可用 socket：执行 systemctl --user restart sommelier@0.service 修复 $cur"
+        fi
     else
-        note "会话: XDG_SESSION_TYPE=$st，未检测到 WAYLAND_DISPLAY"
+        note "会话: XDG_SESSION_TYPE=$st，未检测到 WAYLAND_DISPLAY（启动器会自动挑一个可连接的 socket）"
     fi
-    if command -v pgrep >/dev/null 2>&1 && pgrep -x sommelier >/dev/null 2>&1; then
+    if command -v pgrep >/dev/null 2>&1 && pgrep -f '[s]ommelier' >/dev/null 2>&1; then
         pass "Sommelier: 运行中（ChromeOS / Crostini）"
     else
         note "Sommelier: 未检测到（不是标准 Crostini 会话？）"
@@ -673,6 +773,22 @@ if [[ -z "$QQ" ]]; then
     exit 1
 fi
 
+# 启动前确认 Wayland socket 可连：坏 socket 会让 QQ 直接 SIGSEGV，见上面的函数说明。
+wl_log=skip
+if [[ -n "${QQ_CRFIX_IGNORE_WAYLAND_CHECK:-}" && "${QQ_CRFIX_IGNORE_WAYLAND_CHECK}" != 0 ]]; then
+    WL_NOTE=""
+elif select_wayland_display; then
+    export WAYLAND_DISPLAY="$WL_CHOSEN"
+    wl_log="$WL_CHOSEN"
+    [[ -z "$WL_NOTE" ]] || echo "qq-crfix: $WL_NOTE" >&2
+else
+    echo "qq-crfix: $WL_NOTE" >&2
+    echo "qq-crfix: 没有可连接的 Wayland display，拒绝启动 QQ —— 否则 Ozone/Wayland 初始化失败后 QQ 会直接 SIGSEGV。" >&2
+    echo "qq-crfix: 修复环境：systemctl --user restart sommelier@0.service" >&2
+    echo "qq-crfix: 或指定可用显示：QQ_CRFIX_WAYLAND_DISPLAY=wayland-1 qq-crfix；用 qq-crfix --doctor 查看可用 socket。" >&2
+    exit 3
+fi
+
 preload=""
 for lib in "$SCREENSHARE_LIB" "$CLIPBOARD_LIB" "$SCREENSHOT_LIB" "$BORDERFIX_LIB"; do
     [[ -r "$lib" ]] && preload="${preload:+$preload:}$lib"
@@ -699,6 +815,9 @@ if [[ -n "${QQ_CRFIX_IME_DISABLE:-}" && "${QQ_CRFIX_IME_DISABLE}" != 0 ]]; then
 fi
 
 keep_crash_records
-{ echo "=== qq-crfix $VERSION $(date '+%F %T') $QQ $* ime=$ime_state clipboard=$(clipboard_state)"; } >"$LOG" 2>/dev/null || LOG=/dev/null
+{
+    echo "=== qq-crfix $VERSION $(date '+%F %T') $QQ $* ime=$ime_state clipboard=$(clipboard_state) wl=$wl_log"
+    [[ -z "$WL_NOTE" ]] || echo "qq-crfix: $WL_NOTE"
+} >"$LOG" 2>/dev/null || LOG=/dev/null
 
 exec "$QQ" --ozone-platform=wayland ${ime_args[@]+"${ime_args[@]}"} "$@" >>"$LOG" 2>&1
