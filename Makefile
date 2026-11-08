@@ -3,7 +3,7 @@
 #   make
 #   make install DESTDIR=... PREFIX=/usr
 #
-# LIBEXECDIR 下放四个注入库；启动脚本在安装时写入它的绝对路径。
+# LIBEXECDIR 下只放剪贴板注入库；启动脚本在安装时写入它的绝对路径。
 
 NAME       := qq-crfix
 VERSION    ?= $(or $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//'),0.0.0)
@@ -19,35 +19,17 @@ CFLAGS     ?= -O2 -g
 PKG_CONFIG ?= pkg-config
 WAYLAND_SCANNER ?= wayland-scanner
 
-# 屏幕共享修复：只用 libpulse / libpipewire 的头文件，运行时不依赖它们
-SS_CFLAGS  := $(shell $(PKG_CONFIG) --cflags gio-unix-2.0 libpulse libpipewire-0.3)
-SS_LIBS    := $(shell $(PKG_CONFIG) --libs gio-unix-2.0)
-# 剪贴板修复
+# 剪贴板修复：只需要 X11 与 wayland-client
 CB_CFLAGS  := $(shell $(PKG_CONFIG) --cflags x11 wayland-client)
 CB_LIBS    := $(shell $(PKG_CONFIG) --libs x11 wayland-client)
 
-SS_LIB     := libqq-wl-portal.so
 CB_LIB     := libqq-clipbridge.so
-SH_LIB     := libqq-screenshot.so
-BF_LIB     := libqq-borderfix.so
 CMD        := $(NAME)
 CB_PROTOCOLS := ext-data-control-v1 wlr-data-control-unstable-v1
 CB_GEN_H   := $(CB_PROTOCOLS:%=build/%-client-protocol.h)
 CB_GEN_C   := $(CB_PROTOCOLS:%=build/%-protocol.c)
 
-all: $(SS_LIB) $(CB_LIB) $(SH_LIB) $(BF_LIB) $(CMD)
-
-build/qq-wl-portal.o: src/qq-wl-portal.c
-	@mkdir -p build
-	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -Wall -Wextra -Wno-nonnull-compare \
-	    -DCRFIX_VERSION='"$(VERSION)"' $(SS_CFLAGS) -c -o $@ $<
-
-build/dlsym_trampoline.o: src/dlsym_trampoline.S
-	@mkdir -p build
-	$(CC) $(CPPFLAGS) $(ASFLAGS) -fPIC -c -o $@ $<
-
-$(SS_LIB): build/qq-wl-portal.o build/dlsym_trampoline.o
-	$(CC) $(LDFLAGS) -shared -Wl,-z,defs -o $@ $^ $(SS_LIBS) -ldl
+all: $(CB_LIB) $(CMD)
 
 build/%-client-protocol.h: protocol/%.xml
 	@mkdir -p build
@@ -64,31 +46,12 @@ $(CB_LIB): $(CB_SRCS) src/clipbridge/clipbridge.h $(CB_GEN_H) $(CB_GEN_C)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -fvisibility=hidden -Wall -Wextra -Ibuild $(CB_CFLAGS) \
 	    $(LDFLAGS) -shared -Wl,-z,defs -o $@ $(CB_SRCS) $(CB_GEN_C) $(CB_LIBS) -lpthread -ldl
 
-# 截图修复：同样用 X11 与 wayland-client（ext-image-copy-capture，退回 wlr-screencopy）；
-# ext-foreign-toplevel-list 只是 capture-source 引用到的接口定义
-SH_PROTOCOLS := ext-image-capture-source-v1 ext-image-copy-capture-v1 ext-foreign-toplevel-list-v1 \
-                wlr-screencopy-unstable-v1 xdg-output-unstable-v1
-SH_GEN_H   := $(SH_PROTOCOLS:%=build/%-client-protocol.h)
-SH_GEN_C   := $(SH_PROTOCOLS:%=build/%-protocol.c)
-
-$(SH_LIB): src/qq-screenshot.c $(SH_GEN_H) $(SH_GEN_C)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -Wall -Wextra -Ibuild $(CB_CFLAGS) \
-	    $(LDFLAGS) -shared -Wl,-z,defs -o $@ src/qq-screenshot.c $(SH_GEN_C) $(CB_LIBS) -ldl
-
-# 共享边框隐藏：socket 层拦 Wayland 出站流量，把「屏幕共享」全屏边框的 buffer 摘掉
-$(BF_LIB): src/qq-borderfix.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -Wall -Wextra \
-	    $(LDFLAGS) -shared -Wl,-z,defs -o $@ src/qq-borderfix.c -lpthread -ldl
-
 $(CMD): $(CMD).in
 	sed -e 's|@LIBEXECDIR@|$(LIBEXECDIR)|g' -e 's|@VERSION@|$(VERSION)|g' $< > $@
 	chmod +x $@
 
 install: all
-	install -Dm755 $(SS_LIB)         $(DESTDIR)$(LIBEXECDIR)/$(SS_LIB)
 	install -Dm755 $(CB_LIB)         $(DESTDIR)$(LIBEXECDIR)/$(CB_LIB)
-	install -Dm755 $(SH_LIB)         $(DESTDIR)$(LIBEXECDIR)/$(SH_LIB)
-	install -Dm755 $(BF_LIB)         $(DESTDIR)$(LIBEXECDIR)/$(BF_LIB)
 	install -Dm755 $(CMD)            $(DESTDIR)$(BINDIR)/$(CMD)
 	install -Dm644 $(CMD).desktop    $(DESTDIR)$(DATADIR)/applications/$(CMD).desktop
 	install -Dm644 README.md         $(DESTDIR)$(DOCDIR)/README.md
@@ -96,17 +59,9 @@ install: all
 	install -Dm644 LICENSE           $(DESTDIR)$(DATADIR)/licenses/$(NAME)/LICENSE
 
 clean:
-	rm -rf build src/*.o $(SS_LIB) $(CB_LIB) $(SH_LIB) $(BF_LIB) $(CMD)
+	rm -rf build src/*.o $(CB_LIB) $(CMD)
 
 print-version:
 	@echo $(VERSION)
 
-build/dmabuf-format-test: tools/dmabuf-format-test.c src/qq-wl-portal.c
-	@mkdir -p build
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Wall -Wextra -Wno-nonnull-compare $(SS_CFLAGS) \
-	    -o $@ $< $(SS_LIBS) -ldl
-
-check-dmabuf: build/dmabuf-format-test
-	./build/dmabuf-format-test
-
-.PHONY: all install clean print-version check-dmabuf
+.PHONY: all install clean print-version

@@ -23,8 +23,8 @@ Package: $pkg
 Version: $version-1~$label
 Architecture: $arch
 Maintainer: Remik1r3n <remik1r3n@users.noreply.github.com>
-Depends: libc6 (>= 2.34), libglib2.0-0t64 | libglib2.0-0, libx11-6, libwayland-client0
-Recommends: linuxqq, xdg-desktop-portal
+Depends: libc6 (>= 2.34), libx11-6, libwayland-client0
+Recommends: linuxqq
 Conflicts: linuxqq-wayland-fix
 Section: net
 Priority: optional
@@ -32,8 +32,7 @@ Homepage: https://github.com/Remik1r3n/LinuxQQ-CrFix
 Description: Linux QQ ChromeOS Fix - run Linux QQ comfortably on Crostini
  Starts QQ with native Wayland and ChromeOS IME (text-input-v1) support,
  and never selects an ANGLE/Vulkan backend (Crostini's virtual GPU makes
- QQ render garbage with Vulkan). Also ships the upstream Wayland fixes
- for screen sharing, clipboard, screenshot and shared-device audio.
+ QQ render garbage with Vulkan). Also ships the Wayland clipboard fix.
  Open "QQ (CrFix)" from the application menu.
 CTRL
     dpkg-deb --root-owner-group --build "$stage" "$dist/${pkg}_${version}-1~${label}_${arch}.deb"

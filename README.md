@@ -16,12 +16,14 @@
 | 删掉 `QQ_WAYLAND_FIX_ANGLE` | 连同全部相关功能一起删除：Vulkan ICD 探测、`--use-angle=vulkan/swiftshader`、`VK_DRIVER_FILES` 混合显卡限定、GPU 进程崩溃后的自动回退监视、`~/.cache/.../angle-vulkan-failed` 记录、`--doctor` 里的 ANGLE 检查，以及文档中的对应章节。启动器**不再给 QQ 传任何 ANGLE/Vulkan 参数，也不设置 `VK_DRIVER_FILES`** |
 | 改名 | 项目 **Linux QQ ChromeOS Fix**；可执行文件 `qq-crfix`；桌面项 `QQ (CrFix)`；日志、缓存、环境变量前缀统一为 `qq-crfix` / `QQ_CRFIX_*` |
 | 删掉桌面环境专用功能 | KDE 的 KWin `ScreenShot2`、GNOME 的 portal `Screenshot` 两条截图路径，连同 `qq-screenshot-helper` 可执行文件与它的 `.desktop` 权限声明；KDE 下自动禁用剪贴板修复、合成器版本探测（niri / Hyprland / KWin / GNOME Shell）、niri IPC、`--doctor` 里按桌面分流的检查，以及相关环境变量和文档章节 |
-| 精简后保留 | 上游四个注入库中与具体桌面无关的通用部分（屏幕共享与共享电脑声音、剪贴板、截图防闪退、窗口边框）、`--doctor` 自检、`install` / `uninstall` 快捷方式覆盖 |
+| **删掉截图 / 屏幕共享 / 共享电脑声音 / Easy Effects 相关功能** | 上游的 `libqq-wl-portal.so`（屏幕共享、共享设备音频、共享时防闪退、语音麦克风延迟）、`libqq-screenshot.so`（截图防闪退）、`libqq-borderfix.so`（共享边框、截图覆盖层、提示条）三个注入库整体删除；连同 portal / ScreenCast 自检、Easy Effects 排除名单检查、截屏与 capture-source 协议描述、DMA-BUF/内存测试工具、演示文件、`libpulse` / `libpipewire` 构建依赖及对应文档章节一并清理。ChromeOS 的 Sommelier 不提供 `ext-image-copy-capture`、`wlr-screencopy` 等截屏协议，容器里也没有可用的 ScreenCast 后端，这些功能在 Crostini 下**既不需要也实现不了**。详见 [常见问题与排错](docs/常见问题与排错.md) |
+| 不再伪装会话类型 | 启动器不再把 `XDG_SESSION_TYPE` 设成 `x11`（那原本是配合屏幕共享/截图注入库的）。QQ 按容器里的真实会话类型走自己的截图路径，也就不会踩 XWayland 根窗口 `XGetImage` 的闪退 |
+| 精简后保留 | 启动参数与启动前 Wayland socket 可连接性检查、剪贴板修复（`libqq-clipbridge.so`）、`--doctor` 自检、`install` / `uninstall` 快捷方式覆盖 |
 | 启动前防护 | 启动前真正 connect 一次 `WAYLAND_DISPLAY` 对应的 socket：连不上就自动改用其它可连接的 `wayland-*`，一个都没有就明确报错退出。QQ 在 Ozone/Wayland 初始化失败后会空指针段错误，这层检查保证不会把 QQ 送进那个崩溃路径 |
 
-上游的功能演示（录制于普通 Linux Wayland 桌面，不是 Crostini）：[剪贴板](./pics/剪贴板-after.gif)、[屏幕共享](./pics/屏幕分享异常演示-before.gif)、[截图](./pics/截图闪退-before.gif)。
+上游的剪贴板功能演示（录制于普通 Linux Wayland 桌面，不是 Crostini）：[剪贴板](./pics/剪贴板-after.gif)。
 
-> 这几个注入库依赖合成器提供的 `ext-data-control` / `ext-image-copy-capture` / `wlr-screencopy` 等协议和 `xdg-desktop-portal`；剩下的代码都是运行时按协议探测的通用逻辑，不再绑定任何桌面环境。Crostini 的 Sommelier 是否提供这些协议取决于 ChromeOS 版本，请以 `qq-crfix --doctor` 的结果为准；**本项目的核心目标（原生 Wayland + 输入法 + 不花屏）不依赖这些协议**。
+> 剪贴板注入库依赖合成器提供 `ext-data-control` / `wlr-data-control` 协议；Sommelier 是否提供取决于 ChromeOS 版本，请以 `qq-crfix --doctor` 的结果为准。**本项目的核心目标（原生 Wayland + 输入法 + 不花屏）不依赖这些协议。**
 
 ## 安装
 
@@ -46,7 +48,7 @@ sudo pacman -U ./qq-crfix-*.pkg.tar.zst           # Arch（需先装好 linuxqq�
 
 ### 源码
 
-依赖：C 编译器、make、pkg-config、wayland-scanner，以及 glib2（gio）、libX11、libwayland-client 的开发文件；libpulse、libpipewire-0.3 的开发文件（只用头文件，运行时不依赖）。
+依赖：C 编译器、make、pkg-config、wayland-scanner，以及 libX11、libwayland-client 的开发文件。不再需要 libpulse / libpipewire 的开发包。
 
 ```bash
 make
@@ -108,18 +110,20 @@ qq-crfix uninstall     # 恢复原样
 | `QQ_CRFIX_IME_DISABLE=1` | 只关掉两个 IME 参数（排查用），`--ozone-platform=wayland` 仍保留 |
 | `QQ_CRFIX_WAYLAND_DISPLAY=wayland-1` | 显式指定给 QQ 的 Wayland display；连不上直接报错，不自动回退 |
 | `QQ_CRFIX_IGNORE_WAYLAND_CHECK=1` | 跳过启动前的 socket 可连接性检查（排查用，日志记 `wl=skip`） |
+| `QQ_CLIPBOARD_FIX_DISABLE=1` | 关闭剪贴板修复（排查用） |
+| `QQ_CLIPBOARD_DEBUG=1` | 剪贴板日志多记每次向 QQ 取数据的结果 |
 
-上游注入库自己的排查开关（`QQ_WL_NATIVE_DISABLE`、`QQ_CLIPBOARD_FIX_DISABLE`、`QQ_SCREENSHOT_FIX_DISABLE`、`QQ_BORDER_FIX_DISABLE` 等）名称不变，完整列表见 [常见问题与排错](docs/常见问题与排错.md)。`qq-crfix --help` 会列出常用的几个。
+`qq-crfix --help` 会列出启动器自己认识的变量；剪贴板库自己的开关见 [常见问题与排错](docs/常见问题与排错.md)。
 
 ## 常见问题
 
 - **一点图标就段错误 / QQ 没有窗口直接退出**：多半是 `WAYLAND_DISPLAY` 指向的 socket 变成了「空壳」（文件还在但没人监听）。启动器现在会自动改用可连接的 display 并在日志里写 `wl=...`；一个可用都没有时会明确报错而不是段错误。跑 `qq-crfix --doctor` 看会话段，必要时执行 `systemctl --user restart sommelier@0.service` 修复，详见 [常见问题与排错](docs/常见问题与排错.md)。
 - **QQ 里打不了中文**：先跑 `qq-crfix --doctor` 看有没有 `text-input-v1`；确认 QQ 是从「QQ (CrFix)」启动的（旧 QQ 要连托盘一起退干净）；ChromeOS 系统输入法要处于启用状态。切换输入法的快捷键若被 ChromeOS 抢走，需要给 Sommelier 配 `SOMMELIER_ACCELERATORS` 放行。
 - **整个 QQ 花屏 / 显示不全**：确认没有手动给 QQ 传 `--use-angle=*`、`--enable-features=Vulkan` 或 `VK_DRIVER_FILES`，也没有残留上游 `linuxqq-wayland-fix` 的启动器在启动 QQ。本项目永远不会选 Vulkan 后端。
-- **屏幕共享、剪贴板、截图仍异常**：这些是继承来的修复，依赖合成器协议和 portal，跑一下 `qq-crfix --doctor`；Crostini 的 Sommelier 不提供相应协议时，这几项无法生效，详见 [常见问题与排错](docs/常见问题与排错.md)。
-- **截图是黑图**：Sommelier 不提供截屏协议时，截图库只能给黑图兜底（按截图键不会闪退）。本项目已删掉 KDE / GNOME 的专用截图路径，没有别的开关能让它出图。
+- **剪贴板不通**：跑一下 `qq-crfix --doctor`；Sommelier 不提供 data-control 协议时剪贴板修复无法生效，详见 [常见问题与排错](docs/常见问题与排错.md)。
+- **截图 / 屏幕共享不能用**：这些功能的上游修复已**整体删除**，本项目不再提供任何相关开关或环境变量，Crostini 下本来也无法实现。不要再去寻找 `QQ_WL_*` / `QQ_SCREENSHOT_*` / `QQ_BORDER_*` 之类的变量；QQ 自带的截图/共享行为由 QQ 与 ChromeOS 决定。
 
-更完整的原理与逆向分析见 [docs/原理详解.md](docs/原理详解.md)（沿袭上游，已去掉 ANGLE/Vulkan 与 KDE/GNOME 专用截图章节）。
+更完整的原理与剪贴板逆向分析见 [docs/原理详解.md](docs/原理详解.md)（沿袭上游，已去掉 ANGLE/Vulkan、KDE/GNOME 专用截图，以及截图/屏幕共享/Easy Effects 相关章节）。
 
 ## 致谢
 

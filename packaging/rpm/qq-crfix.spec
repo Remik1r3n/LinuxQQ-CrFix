@@ -10,22 +10,17 @@ Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  gcc
 BuildRequires:  make
-BuildRequires:  pkgconfig(gio-unix-2.0)
-BuildRequires:  pkgconfig(libpulse)
-BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(x11)
 BuildRequires:  pkgconfig(wayland-client)
 BuildRequires:  wayland-devel
-Requires:       glib2
+Requires:       glibc
 Recommends:     linuxqq
-Recommends:     xdg-desktop-portal
 Conflicts:      linuxqq-wayland-fix
 
 %description
 Starts QQ with native Wayland and ChromeOS IME (text-input-v1) support,
 and never selects an ANGLE/Vulkan backend: Crostini's virtual GPU makes
-QQ render garbage with Vulkan. Also ships the upstream Wayland fixes for
-screen sharing, clipboard, screenshot and shared-device audio.
+QQ render garbage with Vulkan. Also ships the Wayland clipboard fix.
 Open "QQ (CrFix)" from the application menu.
 
 %prep

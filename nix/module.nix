@@ -47,12 +47,5 @@ in
 
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [ cfg.package ] ++ lib.optional (cfg.qq != null) cfg.qq;
-
-    warnings = lib.optional (!(config.xdg.portal.enable or false)) ''
-      programs.qq-crfix 已启用，但没有启用 xdg-desktop-portal。
-      QQ 的屏幕共享走 portal 的 ScreenCast 接口，缺了它共享会失败。
-      Crostini 的 Sommelier 是否提供 ScreenCast 取决于 ChromeOS 版本，
-      请用 qq-crfix --doctor 确认。
-    '';
   };
 }

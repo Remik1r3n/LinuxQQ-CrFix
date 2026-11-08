@@ -5,15 +5,9 @@
   config,
   lib,
   pkgs,
-  osConfig ? null,
   ...
 }: let
   cfg = config.programs.qq-crfix;
-
-  systemPortal =
-    if osConfig == null
-    then null
-    else osConfig.xdg.portal.enable or null;
 in {
   options.programs.qq-crfix = {
     enable = lib.mkEnableOption "Linux QQ ChromeOS Fix (qq-crfix)：Crostini 下以原生 Wayland 运行并使用 ChromeOS 输入法";
@@ -49,15 +43,5 @@ in {
 
   config = lib.mkIf cfg.enable {
     home.packages = [cfg.package] ++ lib.optional (cfg.qq != null) cfg.qq;
-
-    # 独立模式（osConfig 为 null）下判断不了系统有没有 portal；
-    # 被 NixOS 模块接管时能直接看到 xdg.portal.enable。
-    warnings = lib.optional (systemPortal == false) ''
-      programs.qq-crfix 已启用，但系统里没有启用 xdg-desktop-portal。
-      QQ 的屏幕共享走 portal 的 ScreenCast 接口，缺了它共享会失败；
-      Home Manager 只能装用户级的东西，请在 NixOS 配置里设置
-      xdg.portal.enable = true。Crostini 的 Sommelier 是否提供 ScreenCast
-      取决于 ChromeOS 版本，请用 qq-crfix --doctor 确认。
-    '';
   };
 }

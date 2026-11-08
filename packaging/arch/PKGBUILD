@@ -8,11 +8,10 @@ pkgdesc="Linux QQ ChromeOS Fix：让 Linux QQ 在 ChromeOS Crostini 下以原生
 arch=('x86_64' 'aarch64')
 url="https://github.com/Remik1r3n/LinuxQQ-CrFix"
 license=('MIT')
-depends=('glibc' 'glib2' 'libx11' 'wayland' 'linuxqq')
-makedepends=('libpulse' 'libpipewire' 'pkgconf')
+depends=('glibc' 'libx11' 'wayland' 'linuxqq')
+makedepends=('pkgconf')
 conflicts=('linuxqq-clipsync' 'qq-crfix-git' 'linuxqq-wayland-fix')
 options=('!debug')
-optdepends=('xdg-desktop-portal: 屏幕录制（需要合成器对应的后端）')
 
 _root="$startdir/../.."
 

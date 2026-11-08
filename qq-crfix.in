@@ -16,29 +16,23 @@
 # 本项目不会给 QQ 传 --use-angle=* 或设置 VK_DRIVER_FILES：
 #   Crostini 的 Vulkan（VirGL/Venus 虚拟 GPU）会让整个 QQ 花屏，任何 ANGLE/Vulkan 后端选择都没有意义。
 #
+# 只注入剪贴板修复库。截图、屏幕共享（含共享电脑声音、共享时防闪退）、
+#   共享边框与截图覆盖层等修复，以及 Easy Effects 相关检查均已删除：
+#   Crostini 不提供这些功能依赖的 Wayland 协议与 portal，无法实现，也不再伪装会话类型。
+#
 # 环境变量：
 #   QQ_CRFIX_QQ               QQ 的启动命令（默认先找 PATH 里的 linuxqq，再找 /opt/QQ/qq）
 #   QQ_CRFIX_LOG              日志文件（默认 $XDG_RUNTIME_DIR/qq-crfix.log）
 #   QQ_CRFIX_WAYLAND_DISPLAY  显式指定给 QQ 的 WAYLAND_DISPLAY（连不上就直接报错，不自动回退）
 #   QQ_CRFIX_IGNORE_WAYLAND_CHECK=1  跳过启动前的 Wayland socket 可连接性检查（排查用）
 #   QQ_CRFIX_IME_DISABLE=1    不加 --enable-wayland-ime / --wayland-text-input-version=1（排查用）
-#   QQ_WL_NATIVE_DISABLE=1    关闭屏幕共享修复（排查问题用）
-#   QQ_WL_DMABUF=off|first    合成器只给 DMA-BUF 时共享画面用 LINEAR DMA-BUF；
-#                             off 关掉，first 让它优先于共享内存（排查用）
-#   QQ_WL_FRAME_REUSE_DISABLE=1 关闭「复用采集纹理」（排查共享时内存增长用）
-#   QQ_VOICE_LATENCY_MSEC     语音通话麦克风的录音缓冲毫秒数（默认 30；0 关闭，回到 QQ 原本的 2 秒）
 #   QQ_CLIPBOARD_FIX_DISABLE=1 关闭剪贴板修复（排查问题用）
-#   QQ_SCREENSHOT_FIX_DISABLE=1 关闭截图防闪退（排查问题用）
-#   QQ_BORDER_FIX_DISABLE=1   关闭窗口修补（共享边框隐藏、截图覆盖层标题与全屏；排查问题用）
 
 set -u
 
 VERSION="@VERSION@"
 LIBDIR="@LIBEXECDIR@"
-SCREENSHARE_LIB="$LIBDIR/libqq-wl-portal.so"
 CLIPBOARD_LIB="$LIBDIR/libqq-clipbridge.so"
-SCREENSHOT_LIB="$LIBDIR/libqq-screenshot.so"
-BORDERFIX_LIB="$LIBDIR/libqq-borderfix.so"
 LOG="${QQ_CRFIX_LOG:-${XDG_RUNTIME_DIR:-/tmp}/qq-crfix.log}"
 QQ_CRASH_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/QQ/crash_files"
 CRASH_KEEP="${XDG_CACHE_HOME:-$HOME/.cache}/qq-crfix/crash"
@@ -67,7 +61,7 @@ keep_crash_records() {
 # 但 Sommelier 监听的是已被 unlink 的旧 inode（同名 socket 被别的合成器占用过，
 # 或 service 重启时 socket 文件被覆盖）。此时 connect() 返回 ECONNREFUSED，
 # QQ 的 Ozone/Wayland 初始化失败，随后在退出路径上解引用空指针，直接 SIGSEGV
-# （崩溃点 qq+0x2a8d06e；关掉全部四个注入库照样崩，与本项目无关）。
+# （崩溃点 qq+0x2a8d06e；不注入任何库照样崩，与本项目无关）。
 # 所以启动前真的连一次：连不上就换一个能连的 display；一个都没有就明确报错，
 # 绝不把 QQ 送进段错误。
 # ---------------------------------------------------------------------------
@@ -197,22 +191,6 @@ pkg_installed() {
     done
 }
 
-# 文件所属包「名 版本」（best-effort），查不到输出空。
-pkg_own() {
-    local f="$1" p
-    if command -v pacman >/dev/null 2>&1; then
-        p=$(pacman -Qoq "$f" 2>/dev/null | head -1)
-        [[ -n "$p" ]] && { pacman -Q "$p" 2>/dev/null; return; }
-    fi
-    if command -v dpkg-query >/dev/null 2>&1; then
-        p=$(dpkg -S "$f" 2>/dev/null | head -1 | cut -d: -f1)
-        [[ -n "$p" ]] && { dpkg-query -W -f='${Package} ${Version}\n' "$p" 2>/dev/null; return; }
-    fi
-    if command -v rpm >/dev/null 2>&1; then
-        rpm -qf --qf '%{NAME} %{VERSION}-%{RELEASE}\n' "$f" 2>/dev/null
-    fi
-}
-
 # 已安装的 QQ：包管理器优先（pacman/dpkg/rpm），查不到再退回可执行文件/AppImage。
 qq_installed() {
     local out exe
@@ -228,117 +206,14 @@ qq_installed() {
     echo "$out"
 }
 
-# 已安装的 portal 后端（.portal 文件），同名只取第一个；查找目录与 xdg-desktop-portal 相同。
-portal_impl_files() {
-    local d f n seen=" "
-    local -a data
-    IFS=: read -ra data <<< "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
-    for d in "${XDG_DATA_HOME:-$HOME/.local/share}" "${data[@]}" /usr/share; do
-        for f in "${d%/}"/xdg-desktop-portal/portals/*.portal; do
-            [[ -f "$f" ]] || continue
-            n=$(basename "$f" .portal)
-            [[ "$seen" == *" $n "* ]] && continue
-            seen+="$n "
-            echo "$f"
-        done
-    done
-}
-
-# portals.conf 里 [preferred] 的某个键，输出后端名，一行一个。
-portal_conf_get() {
-    awk -F= -v key="$2" '
-        /^\[/ { sec = $0; next }
-        sec != "[preferred]" { next }
-        { k = $1; gsub(/[ \t]/, "", k) }
-        k == key {
-            n = split(substr($0, index($0, "=") + 1), a, ";")
-            for (i = 1; i <= n; i++) { gsub(/[ \t]/, "", a[i]); if (a[i] != "") print a[i] }
-            exit
-        }' "$1"
-}
-
-# 当前桌面下 xdg-desktop-portal 给 ScreenCast 选的后端，输出「.portal 文件<TAB>依据」；没选出来时输出空。
-# 规则同 xdg-desktop-portal 1.22：用户配置、系统配置、数据目录里每个目录取一份
-# <桌面>-portals.conf（没有就取 portals.conf），按顺序先看接口专门的那一行、再看 default=；
-# 都没选出来才退回 .portal 文件里旧的 UseIn，最后是 gtk 兜底。
-# 有些合成器没有以自己名字命中的 UseIn，靠 <桌面>-portals.conf 选后端。
-portal_backend() {
-    local iface=org.freedesktop.impl.portal.ScreenCast
-    local base conf de key name f
-    local -a desktops cfgdirs datadirs names
-    IFS=: read -ra desktops <<< "${XDG_CURRENT_DESKTOP:-}"
-    IFS=: read -ra cfgdirs <<< "${XDG_CONFIG_DIRS:-/etc/xdg}"
-    IFS=: read -ra datadirs <<< "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
-    local -a all sc_impls=()
-    mapfile -t all < <(portal_impl_files)
-    for f in "${all[@]}"; do
-        sed -n 's/^Interfaces=//p' "$f" | tr ';' '\n' | grep -qxF "$iface" && sc_impls+=("$f")
-    done
-
-    for base in "${XDG_CONFIG_HOME:-$HOME/.config}" "${cfgdirs[@]}" /etc \
-                "${XDG_DATA_HOME:-$HOME/.local/share}" "${datadirs[@]}" /usr/share; do
-        conf=""
-        for de in "${desktops[@]}" ""; do
-            f="${base%/}/xdg-desktop-portal/${de:+${de,,}-}portals.conf"
-            [[ -f "$f" ]] && { conf="$f"; break; }
-        done
-        [[ -n "$conf" ]] || continue
-        # 「none」只看接口专门的那一行；没有那一行时才看 default=
-        mapfile -t names < <(portal_conf_get "$conf" "$iface")
-        [[ ${#names[@]} -gt 0 ]] || mapfile -t names < <(portal_conf_get "$conf" default)
-        [[ " ${names[*]} " == *" none "* ]] && return 0
-        for key in "$iface" default; do
-            mapfile -t names < <(portal_conf_get "$conf" "$key")
-            for name in "${names[@]}"; do
-                for f in "${sc_impls[@]}"; do
-                    [[ "$name" == "*" || "$(basename "$f" .portal)" == "$name" ]] \
-                        && { printf '%s\t%s\n' "$f" "$conf"; return 0; }
-                done
-            done
-        done
-    done
-
-    for de in "${desktops[@]}"; do
-        for f in "${sc_impls[@]}"; do
-            sed -n 's/^UseIn=//p' "$f" | tr ';' '\n' | grep -qixF "$de" \
-                && { printf '%s\tUseIn\n' "$f"; return 0; }
-        done
-    done
-    for f in "${sc_impls[@]}"; do
-        grep -qx 'DBusName=org.freedesktop.impl.portal.desktop.gtk' "$f" \
-            && { printf '%s\tgtk 兜底\n' "$f"; return 0; }
-    done
-}
-
-# portal 接口版本与可用源（best-effort）：如 "ScreenCast v4（显示器、窗口），Screenshot v2"。
-portal_interfaces() {
-    command -v busctl >/dev/null 2>&1 || return 0
-    local base=org.freedesktop.portal.Desktop obj=/org/freedesktop/portal/desktop
-    local sc ss types src="" out=""
-    sc=$(busctl --user get-property "$base" "$obj" org.freedesktop.portal.ScreenCast version 2>/dev/null | awk '{print $2}')
-    ss=$(busctl --user get-property "$base" "$obj" org.freedesktop.portal.Screenshot version 2>/dev/null | awk '{print $2}')
-    types=$(busctl --user get-property "$base" "$obj" org.freedesktop.portal.ScreenCast AvailableSourceTypes 2>/dev/null | awk '{print $2}')
-    if [[ "$sc" =~ ^[0-9]+$ ]]; then
-        out="ScreenCast v$sc"
-        if [[ "$types" =~ ^[0-9]+$ ]]; then
-            (( types & 1 )) && src="显示器"
-            (( types & 2 )) && src="${src:+$src、}窗口"
-            (( types & 4 )) && src="${src:+$src、}虚拟屏"
-            out+="（${src:-无可用源}）"
-        fi
-    fi
-    [[ "$ss" =~ ^[0-9]+$ ]] && out+="${out:+，}Screenshot v$ss"
-    echo "$out"
-}
-
-# QQ 的“安装根”（含 resources/app 的目录）：安装版是 /opt/QQ，AppImage 在挂载目录里。
+# QQ 的「安装根」（含 resources/app 的目录）：安装版是 /opt/QQ，AppImage 在挂载目录里。
 # 从运行中主进程的 exe 向上找；找不到时退回 AppImage 挂载根/exe 所在目录（find 仍能搜到）。
 qq_runtime_dir() {
     local exe d i
     exe=$(qq_runtime_exe) || return 1
     d=$(dirname "$exe")
     for i in 1 2 3 4 5; do
-        if [[ -e "$d/resources/app" || -e "$d/broadcast-core.so" ]]; then
+        if [[ -e "$d/resources/app" ]]; then
             echo "$d"
             return 0
         fi
@@ -511,27 +386,7 @@ doctor() {
         is_our_desktop "$USER_APPS/$id" && overridden+=("$(tilde "$USER_APPS/$id")")
     done
     [[ ${#overridden[@]} -gt 0 ]] && pass "已覆盖原生 QQ 快捷方式: ${overridden[*]}（qq-crfix uninstall 恢复）"
-    [[ -r "$SCREENSHARE_LIB" ]] && pass "屏幕共享修复: $SCREENSHARE_LIB" || bad "找不到 $SCREENSHARE_LIB"
     [[ -r "$CLIPBOARD_LIB" ]] && pass "剪贴板修复: $CLIPBOARD_LIB" || bad "找不到 $CLIPBOARD_LIB"
-    [[ -r "$SCREENSHOT_LIB" ]] && pass "截图防闪退: $SCREENSHOT_LIB" || bad "找不到 $SCREENSHOT_LIB"
-    # 截图链：靠合成器的截屏协议，ext-image-copy-capture 优先、wlr-screencopy 兜底。
-    # Sommelier 可能两种都不提供；此时截图是黑图，但「不闪退」的兜底仍然有效。
-    if [[ -n "${WAYLAND_DISPLAY:-}" ]] && command -v wayland-info >/dev/null 2>&1; then
-        local globals has_ext=0 has_wlr=0
-        globals=$(wayland-info 2>/dev/null)
-        [[ "$globals" == *"'ext_image_copy_capture_manager_v1'"* && "$globals" == *"'ext_output_image_capture_source_manager_v1'"* ]] && has_ext=1
-        [[ "$globals" == *"'zwlr_screencopy_manager_v1'"* ]] && has_wlr=1
-        if (( has_ext )) && [[ -r "$SCREENSHOT_LIB" ]] && grep -aq 'ext-image-copy-capture' "$SCREENSHOT_LIB"; then
-            pass "截图: 合成器支持 ext-image-copy-capture"
-        elif (( has_wlr )); then
-            pass "截图: 合成器支持 wlr-screencopy"
-        elif (( has_ext )); then
-            bad "截图: 合成器只有 ext-image-copy-capture，这份 libqq-screenshot.so 不支持，截图会全黑，请升级本包"
-        else
-            bad "截图: 合成器既没有 ext-image-copy-capture 也没有 wlr-screencopy，截图会全黑（不影响不闪退）"
-        fi
-    fi
-    [[ -r "$BORDERFIX_LIB" ]] && pass "窗口修补（共享边框/截图覆盖层）: $BORDERFIX_LIB" || note "找不到 $BORDERFIX_LIB（共享边框会变成窗口、截图覆盖层不平铺）"
     if [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
         note "Wayland 会话: WAYLAND_DISPLAY 为空，不在 Wayland 会话里？"
     elif wayland_display_ok "$WAYLAND_DISPLAY"; then
@@ -560,15 +415,9 @@ doctor() {
 
     echo
     echo "[QQ 内部实现（QQ 更新后用来判断修复是否还适用）]"
-    local vdir rdir bc av wrapper
+    local vdir rdir wrapper
     vdir=$(qq_version_dir)
     rdir=$(qq_runtime_dir)
-    local roots=()
-    [[ -n "$vdir" ]] && roots+=("$vdir")
-    [[ -n "$rdir" ]] && roots+=("$rdir")
-    roots+=(/opt/QQ)
-    bc=$(find "${roots[@]}" -name broadcast-core.so -print -quit 2>/dev/null)
-    av=$(find "${roots[@]}" -name libAVSDKPlugin.so -print -quit 2>/dev/null)
     local wrapper_candidates=()
     [[ -n "$vdir" ]] && wrapper_candidates+=("$vdir/wrapper.node")
     if [[ -n "$rdir" ]]; then
@@ -576,41 +425,8 @@ doctor() {
     fi
     wrapper_candidates+=(/opt/QQ/resources/app/wrapper.node)
     wrapper=$(ls "${wrapper_candidates[@]}" 2>/dev/null | head -1)
-    if [[ -z "$bc" ]]; then
-        if [[ -z "$rdir" && -e /opt/linuxqq-appimage ]]; then
-            note "找不到 broadcast-core.so：AppImage 需要 QQ 运行中才能检查内部实现（启动 QQ 后再运行 --doctor）"
-        else
-            bad "找不到 broadcast-core.so（QQ 版本目录: ${vdir:-?}）"
-        fi
-    else
-        grep -aq MonitorCapture_WaylandProc "$bc" \
-            && pass "屏幕共享：存在 Wayland 采集线程" \
-            || bad "屏幕共享：没有 MonitorCapture_WaylandProc，QQ 改了采集实现"
-        grep -aq XDG_SESSION_TYPE "$bc" \
-            && pass "屏幕共享：仍用 XDG_SESSION_TYPE 判断 Wayland" \
-            || bad "屏幕共享：broadcast-core 不再读 XDG_SESSION_TYPE"
-        local f
-        for f in pw_context_connect_fd pw_stream_connect pw_core_disconnect pw_stream_dequeue_buffer; do
-            grep -aq "$f" "$bc" || bad "屏幕共享：找不到 $f"
-        done
-        grep -aq pa_context_get_sink_info_by_name "$bc" \
-            && pass "共享电脑声音：仍通过 pa_context_get_sink_info_by_name 查询格式" \
-            || note "共享电脑声音：查询方式变了，可能无声"
-    fi
-    # 窗口几何为空时的崩溃检查（见 qq-wl-portal.c「6.」）：特征码必须恰好出现一次
-    local qqbin offs
-    qqbin=$(qq_runtime_exe)
-    if [[ -f "$qqbin" ]]; then
-        offs=$(LC_ALL=C grep -obaF $'\x44\x8b\x7e\x08\x45\x85\xff\x74' "$qqbin" 2>/dev/null | cut -d: -f1)
-        if [[ "$offs" =~ ^[0-9]+$ ]] &&
-           [[ $(od -An -tx1 -j $((offs + 9)) -N 8 "$qqbin" | tr -d ' \n') == 448b660c4585e474 ]]; then
-            pass "共享时防闪退：找到窗口几何检查"
-        else
-            note "共享时防闪退：QQ 改了实现，显示器坐标不从 0 开始时共享可能闪退（issue #1）"
-        fi
-    fi
     if [[ -z "$wrapper" ]]; then
-        note "找不到 wrapper.node，跳过剪贴板检查"
+        note "找不到 wrapper.node，跳过剪贴板检查（AppImage 版需要 QQ 运行中才能检查）"
     elif grep -aq XSetSelectionOwner "$wrapper"; then
         pass "剪贴板：QQ 仍是 X11 实现"
     else
@@ -621,7 +437,7 @@ doctor() {
     echo "[Crostini / Wayland 会话]"
     local st="${XDG_SESSION_TYPE:-未知}" cur="${WAYLAND_DISPLAY:-}" alt="" f
     if [[ -n "$cur" ]] && wayland_display_ok "$cur"; then
-        pass "会话: ${cur} 可连接（XDG_SESSION_TYPE=$st；启动器会给 QQ 设 x11）"
+        pass "会话: ${cur} 可连接（XDG_SESSION_TYPE=$st）"
     elif [[ -n "$cur" ]]; then
         bad "会话: ${cur} 的 socket 连不上（文件与 Sommelier 监听的 socket 不一致？），QQ 会直接 SIGSEGV"
         for f in "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/wayland-*; do
@@ -641,48 +457,6 @@ doctor() {
     else
         note "Sommelier: 未检测到（不是标准 Crostini 会话？）"
     fi
-    if command -v busctl >/dev/null 2>&1; then
-        local psvc pfile pvia pdbus pown pstate pdesc piface ptypes
-        psvc=$(pkg_installed xdg-desktop-portal)
-        piface=$(portal_interfaces)
-        if [[ -n "$piface" ]]; then
-            pfile=$(portal_backend)
-            pvia=${pfile#*$'\t'}
-            pfile=${pfile%%$'\t'*}
-            [[ "$pvia" == "$HOME"/* ]] && pvia="~${pvia#"$HOME"}"
-            pdesc=""
-            if [[ -n "$pfile" ]]; then
-                pdbus=$(sed -n 's/^DBusName=\(org\.freedesktop\.impl\.portal\..*\)$/\1/p' "$pfile" | head -1)
-                pown=$(pkg_own "$pfile")
-                if [[ -n "$pdbus" ]] && busctl --user list 2>/dev/null | grep -F "$pdbus" | grep -q activatable; then
-                    pstate="按需启动"
-                elif [[ -n "$pdbus" ]] && busctl --user list 2>/dev/null | grep -qF "$pdbus"; then
-                    pstate="运行中"
-                else
-                    pstate="未运行"
-                fi
-                pdesc="，ScreenCast 后端 $(basename "$pfile")（${pown:+$pown，}$pstate；按 $pvia 选中）"
-                if [[ "$pstate" == "未运行" ]]; then
-                    note "Portal: ${psvc:-xdg-desktop-portal} 运行中$pdesc"
-                else
-                    pass "Portal: ${psvc:-xdg-desktop-portal} 运行中$pdesc"
-                fi
-            elif [[ "$piface" != *ScreenCast* ]]; then
-                note "Portal: ${psvc:-xdg-desktop-portal} 运行中（没有选出 ScreenCast 后端，屏幕共享不可用）"
-            else
-                pass "Portal: ${psvc:-xdg-desktop-portal} 运行中"
-            fi
-            pass "Portal 接口: $piface"
-        else
-            bad "Portal: xdg-desktop-portal 不可用（屏幕共享无法工作）"
-        fi
-        ptypes=$(busctl --user get-property org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop \
-                org.freedesktop.portal.ScreenCast AvailableSourceTypes 2>/dev/null | awk '{print $2}')
-        [[ -n "$ptypes" && "$ptypes" != 0 ]] && pass "屏幕共享：portal 录屏可用" \
-            || bad "屏幕共享：xdg-desktop-portal 没有可用的 ScreenCast 实现"
-    else
-        note "没有 busctl，跳过 portal 检查"
-    fi
     if command -v wayland-info >/dev/null 2>&1; then
         local wi; wi=$(wayland-info 2>/dev/null)
         if grep -q ext_data_control_manager_v1 <<< "$wi"; then
@@ -695,36 +469,6 @@ doctor() {
     else
         note "没有 wayland-info，跳过剪贴板协议检查（安装 wayland-utils 可检查）"
     fi
-    # Easy Effects 的排除名单在 [StreamInputs] / [StreamOutputs] 的 blocklist=（逗号分隔）。
-    # 提到 TRAE 但键不是 blocklist 的行（如 exclude=）Easy Effects 不读，单独指出来，免得用户以为配过了。
-    local ee res missing wrong
-    for ee in "$HOME/.var/app/com.github.wwmm.easyeffects/config/easyeffects/db/easyeffectsrc" \
-              "${XDG_CONFIG_HOME:-$HOME/.config}/easyeffects/db/easyeffectsrc"; do
-        [[ -f "$ee" ]] || continue
-        res=$(awk -F= '
-            /^\[/ { sec = $0; next }
-            sec != "[StreamInputs]" && sec != "[StreamOutputs]" { next }
-            $1 == "blocklist" {
-                n = split(substr($0, length($1) + 2), a, ",")
-                for (i = 1; i <= n; i++) if (a[i] == "TRAE") ok[sec] = 1
-                next
-            }
-            /TRAE/ { print "wrong " $1 }
-            END {
-                if (!ok["[StreamInputs]"]) print "missing 输入"
-                if (!ok["[StreamOutputs]"]) print "missing 输出"
-            }' "$ee")
-        wrong=$(awk '$1 == "wrong" { print $2 "=" }' <<<"$res" | sort -u | paste -sd' ')
-        missing=$(awk '$1 == "missing" { printf "「%s」", $2 }' <<<"$res")
-        if [[ -n "$wrong" ]]; then
-            note "Easy Effects 配置里有 $wrong 写着 TRAE，但 Easy Effects 不读这个键，不会生效；排除名单的键是 blocklist=，请在界面里添加，或删掉这些行（$ee）"
-        fi
-        if [[ -n "$missing" ]]; then
-            note "检测到 Easy Effects：请在$missing的排除名单里加上 TRAE，否则 QQ 一开通话/共享就会崩（$ee）"
-        else
-            pass "Easy Effects 已排除 QQ（TRAE）"
-        fi
-    done
     if systemctl --user is-active -q linuxqq-clipsync 2>/dev/null || pgrep -f "(^|/)linuxqq-clipsync( |$)" >/dev/null; then
         note "linuxqq-clipsync 正在运行：本工具已包含剪贴板修复，同时运行会重复同步。请停用：systemctl --user disable --now linuxqq-clipsync"
     fi
@@ -735,7 +479,7 @@ doctor() {
     pid=$(qq_main_pid)
     if [[ -z "$pid" ]]; then
         pass "QQ 未运行"
-    elif tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -q 'libqq-wl-portal.so'; then
+    elif tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -q 'libqq-clipbridge.so'; then
         pass "QQ（PID $pid）已注入"
     else
         bad "QQ（PID $pid）没有注入：请完全退出 QQ（含托盘），再从「QQ (CrFix)」打开"
@@ -790,16 +534,13 @@ else
 fi
 
 preload=""
-for lib in "$SCREENSHARE_LIB" "$CLIPBOARD_LIB" "$SCREENSHOT_LIB" "$BORDERFIX_LIB"; do
+for lib in "$CLIPBOARD_LIB"; do
     [[ -r "$lib" ]] && preload="${preload:+$preload:}$lib"
 done
 export LD_PRELOAD="$preload${LD_PRELOAD:+:$LD_PRELOAD}"
 
-# XDG_SESSION_TYPE=x11：让 QQ 界面与音视频 SDK 不拦截共享；
-#   注入库只对 broadcast-core.so 改报 wayland，使它走自带的 portal + PipeWire 路径。
-# MESA_SHADER_CACHE_DISABLE：QQ 的 libAVSDKPlugin 导出了自带的 ZSTD_* 符号，
-#   会劫持 Mesa 着色器缓存的 zstd 解压，导致采集进程崩溃。
-export XDG_SESSION_TYPE=x11
+# MESA_SHADER_CACHE_DISABLE：QQ 的 libAVSDKPlugin.so 导出了自带的 ZSTD_* 符号，
+#   会劫持 Mesa 着色器缓存的 zstd 解压导致崩溃；禁用磁盘着色器缓存绕开这处冲突。
 export MESA_SHADER_CACHE_DISABLE="${MESA_SHADER_CACHE_DISABLE:-true}"
 
 # 默认启动参数：原生 Wayland + ChromeOS 输入法。
@@ -807,6 +548,7 @@ export MESA_SHADER_CACHE_DISABLE="${MESA_SHADER_CACHE_DISABLE:-true}"
 #   不显式指定版本，ChromeOS 原生输入法在 QQ 里就用不了。
 #   QQ_CRFIX_IME_DISABLE=1 只关掉这两个 IME 参数（排查用），--ozone-platform=wayland 仍保留。
 #   ANGLE/Vulkan 后端刻意一个都不传：Crostini 的虚拟 GPU 走 Vulkan 会让整个 QQ 花屏。
+#   XDG_SESSION_TYPE 保持环境原值，不再伪装成 x11（那原本是给屏幕共享/截图修复用的）。
 ime_args=(--enable-wayland-ime --wayland-text-input-version=1)
 ime_state=on
 if [[ -n "${QQ_CRFIX_IME_DISABLE:-}" && "${QQ_CRFIX_IME_DISABLE}" != 0 ]]; then
