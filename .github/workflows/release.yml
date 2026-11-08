@@ -18,6 +18,7 @@ jobs:
       matrix:
         include:
           - { label: debian12,    image: 'debian:12',        kind: deb }
+          - { label: debian13,    image: 'debian:13',        kind: deb }
           - { label: ubuntu24.04, image: 'ubuntu:24.04',     kind: deb }
           - { label: fedora43,    image: 'fedora:43',        kind: rpm }
           - { label: archlinux,   image: 'archlinux:latest', kind: arch }

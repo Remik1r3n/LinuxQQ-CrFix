@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=QQ (CrFix)
+Name[en]=QQ (CrFix)
+Name[zh_CN]=QQ (CrFix)
+Comment=在 ChromeOS Crostini 下以原生 Wayland 运行 QQ
+Comment[en]=Run QQ with native Wayland on Crostini
+Exec=qq-crfix %U
+Icon=qq
+Terminal=false
+Categories=Network;InstantMessaging;
+StartupWMClass=QQ

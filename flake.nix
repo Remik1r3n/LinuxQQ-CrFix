@@ -1,5 +1,5 @@
 {
-  description = "linuxqq-wayland-fix：修复 Linux QQ 在 Wayland 下的屏幕共享、共享电脑声音、剪贴板和截图闪退";
+  description = "Linux QQ ChromeOS Fix (qq-crfix)：让 Linux QQ 在 ChromeOS Crostini 下以原生 Wayland 运行并使用 ChromeOS 输入法";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -32,7 +32,7 @@
       # nixpkgs 的 pkgs.qq 是 unfree。只有在 nixpkgs 允许 unfree 时才引用它，
       # 否则 packages / overlays 在默认 nixpkgs 上会直接求值报错。
       # 不允许时 packages.default 不带 QQ，启动器会退回自己的查找顺序：
-      # $QQ_WAYLAND_FIX_QQ → PATH 里的 linuxqq → /opt/QQ/qq。
+      # $QQ_CRFIX_QQ → PATH 里的 linuxqq → /opt/QQ/qq。
       #
       # 注意 flake 的 nixpkgs 会读 ~/.config/nixpkgs/config.nix，所以
       # { allowUnfree = true; } 写在那里可以让 packages.default 也带上 QQ。
@@ -64,21 +64,21 @@
     {
       packages = perSystem (pkgs: {
         default = mkPackage { inherit pkgs; };
-        linuxqq-wayland-fix = mkPackage { inherit pkgs; };
+        qq-crfix = mkPackage { inherit pkgs; };
       });
 
       overlays.default = final: _prev: {
-        linuxqq-wayland-fix = mkPackage { pkgs = final; };
+        qq-crfix = mkPackage { pkgs = final; };
       };
 
       nixosModules = {
         default = module;
-        linuxqq-wayland-fix = module;
+        qq-crfix = module;
       };
 
       homeModules = {
         default = homeModule;
-        linuxqq-wayland-fix = homeModule;
+        qq-crfix = homeModule;
       };
 
       devShells = perSystem (pkgs: {

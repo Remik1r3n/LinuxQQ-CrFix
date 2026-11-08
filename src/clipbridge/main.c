@@ -18,7 +18,7 @@
  * X11 程序与 QQ 之间由合成器同步，和其它原生 Wayland 程序一样。每个 QQ 进程（多账号、频道）
  * 只和 Wayland 打交道，谁后复制谁生效，不会互相争抢。
  *
- * 合成器两种 data-control 都没有（如 GNOME）时不拦截，QQ 照原样用 X11。
+ * 合成器两种 data-control 都没有时不拦截，QQ 照原样用 X11。
  *
  * 另外：QQ 的 Chromium Wayland 剪贴板数据源向粘贴方的管道 write() 时没有屏蔽 SIGPIPE；
  * 读端提前关闭时（读端可能是任何程序），Bugly 会把 SIGPIPE 当致命错误直接杀掉整个 QQ。
@@ -304,21 +304,12 @@ EXPORT int sigaction(int signum, const struct sigaction *act, struct sigaction *
 __attribute__((constructor))
 static void init(void)
 {
-    /* QQ_CLIPBOARD_FIX_DISABLE=1：不启用（排查问题用）；
-     * QQ_CLIPBOARD_FIX_FORCE=1：强制启用（任意进程 / KDE 上绕过自动禁用，仅供测试）。 */
+    /* QQ_CLIPBOARD_FIX_DISABLE=1：不启用（排查问题用）。 */
     const char *off = getenv("QQ_CLIPBOARD_FIX_DISABLE");
     if ((off && *off && strcmp(off, "0")) || !getenv("WAYLAND_DISPLAY") || !getenv("DISPLAY"))
         return;
-    if (!getenv("QQ_CLIPBOARD_FIX_FORCE")) {
-        /* KDE Plasma 自己会把 XWayland 的剪贴板与 Wayland 双向同步（KWin/Klipper），
-         * QQ 的 X11 剪贴板本来就能互通，KDE 默认不启用。 */
-        const char *de = getenv("XDG_CURRENT_DESKTOP");
-        const char *kde = getenv("KDE_FULL_SESSION");
-        if ((de && strstr(de, "KDE")) || (kde && *kde))
-            return;
-        if (!is_qq_main_on_wayland())
-            return;
-    }
+    if (!is_qq_main_on_wayland())
+        return;
     /* QQ 的剪贴板代码与后台线程并发使用 Xlib；必须在任何 Xlib 调用之前初始化线程支持。 */
     XInitThreads();
     if (pipe2(wake_pipe, O_CLOEXEC | O_NONBLOCK) < 0)

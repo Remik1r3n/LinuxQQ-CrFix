@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # 屏幕共享内存测试（issue #19 / PR #25）：采样 ppapi 进程的 DRM GEM 记账，判断是否还在泄漏。
 #
-# 用法：先用 linuxqq-wayland-fix 启动 QQ，再运行
+# 用法：先用 qq-crfix 启动 QQ，再运行
 #   bash screenshare-memtest.sh [时长秒数=180] [采样间隔秒数=2]
 # 运行中按提示操作 QQ；Ctrl+C 提前结束。报告保存在当前目录 qq-memtest-*.txt。
 #
-# 环境变量：QQ_WAYLAND_FIX_LOG  本库日志（默认自动在 $XDG_RUNTIME_DIR、/run/user/<uid>、/tmp 里找）
+# 环境变量：QQ_CRFIX_LOG  本库日志（默认自动在 $XDG_RUNTIME_DIR、/run/user/<uid>、/tmp 里找）
 set -u
 
 DURATION=${1:-180}
@@ -18,13 +18,13 @@ FAIL_RATE=20       # MiB/s，高于此视为仍在泄漏（修复前是 25～140
 # 所以几个候选位置都看，取最新的那个。
 find_log() {
     local f best=""
-    for f in ${XDG_RUNTIME_DIR:+"$XDG_RUNTIME_DIR/linuxqq-wayland-fix.log"} \
-             "/run/user/$(id -u)/linuxqq-wayland-fix.log" /tmp/linuxqq-wayland-fix.log; do
+    for f in ${XDG_RUNTIME_DIR:+"$XDG_RUNTIME_DIR/qq-crfix.log"} \
+             "/run/user/$(id -u)/qq-crfix.log" /tmp/qq-crfix.log; do
         [ -f "$f" ] && { [ -z "$best" ] || [ "$f" -nt "$best" ]; } && best=$f
     done
-    echo "${best:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/linuxqq-wayland-fix.log}"
+    echo "${best:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/qq-crfix.log}"
 }
-LOG=${QQ_WAYLAND_FIX_LOG:-$(find_log)}
+LOG=${QQ_CRFIX_LOG:-$(find_log)}
 REPORT="qq-memtest-$(date +%Y%m%d-%H%M%S).txt"
 SAMPLES=$(mktemp)
 LOG_START=0
@@ -93,9 +93,9 @@ for n in /sys/class/drm/renderD*; do
     [ -e "$n/device/driver" ] || continue
     say "GPU：$(basename "$n") 驱动=$(basename "$(readlink -f "$n/device/driver")") vendor=$(cat "$n/device/vendor" 2>/dev/null) device=$(cat "$n/device/device" 2>/dev/null)"
 done
-command -v linuxqq-wayland-fix >/dev/null && say "linuxqq-wayland-fix：$(linuxqq-wayland-fix --version 2>/dev/null)"
-[ -f "$LOG" ] && say "日志：$LOG（$(head -1 "$LOG")）" || say "日志：$LOG 不存在（QQ 不是用 linuxqq-wayland-fix 启动的？）"
-pgrep -x qq >/dev/null || pgrep -f '/opt/QQ/qq' >/dev/null || say "⚠ 没看到 QQ 进程，请先用 linuxqq-wayland-fix 启动 QQ"
+command -v qq-crfix >/dev/null && say "qq-crfix：$(qq-crfix --version 2>/dev/null)"
+[ -f "$LOG" ] && say "日志：$LOG（$(head -1 "$LOG")）" || say "日志：$LOG 不存在（QQ 不是用 qq-crfix 启动的？）"
+pgrep -x qq >/dev/null || pgrep -f '/opt/QQ/qq' >/dev/null || say "⚠ 没看到 QQ 进程，请先用 qq-crfix 启动 QQ"
 hr
 say "请按顺序操作（每步之间不用重启 QQ）："
 say "  1. 共享整个屏幕（最好是最高分辨率那块屏），让画面有变化（如播放视频），保持 60 秒以上"

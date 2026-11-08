@@ -167,7 +167,7 @@ int cb_wl_open(void)
     wl_registry_add_listener(reg, &reg_listener, NULL);
     wl_display_roundtrip(cb_wdpy);
     if (!seat || (!dcm && !wlr_dcm)) {
-        LOG("compositor supports neither ext-data-control nor wlr-data-control (e.g. GNOME); "
+        LOG("compositor supports neither ext-data-control nor wlr-data-control; "
             "QQ keeps using the X11 clipboard");
         wl_display_disconnect(cb_wdpy);
         cb_wdpy = NULL;

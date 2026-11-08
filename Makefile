@@ -1,11 +1,11 @@
-# linuxqq-wayland-fix
+# Linux QQ ChromeOS Fix (qq-crfix)
 #
 #   make
 #   make install DESTDIR=... PREFIX=/usr
 #
-# LIBEXECDIR 下放两个注入库；启动脚本在安装时写入它的绝对路径。
+# LIBEXECDIR 下放四个注入库；启动脚本在安装时写入它的绝对路径。
 
-NAME       := linuxqq-wayland-fix
+NAME       := qq-crfix
 VERSION    ?= $(or $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//'),0.0.0)
 
 PREFIX     ?= /usr
@@ -30,19 +30,17 @@ SS_LIB     := libqq-wl-portal.so
 CB_LIB     := libqq-clipbridge.so
 SH_LIB     := libqq-screenshot.so
 BF_LIB     := libqq-borderfix.so
-SHOT_HELPER := qq-screenshot-helper
-SHOT_HELPER_DESKTOP := $(SHOT_HELPER).desktop
 CMD        := $(NAME)
 CB_PROTOCOLS := ext-data-control-v1 wlr-data-control-unstable-v1
 CB_GEN_H   := $(CB_PROTOCOLS:%=build/%-client-protocol.h)
 CB_GEN_C   := $(CB_PROTOCOLS:%=build/%-protocol.c)
 
-all: $(SS_LIB) $(CB_LIB) $(SH_LIB) $(BF_LIB) $(SHOT_HELPER) $(SHOT_HELPER_DESKTOP) $(CMD)
+all: $(SS_LIB) $(CB_LIB) $(SH_LIB) $(BF_LIB) $(CMD)
 
 build/qq-wl-portal.o: src/qq-wl-portal.c
 	@mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -Wall -Wextra -Wno-nonnull-compare \
-	    -DQQWL_VERSION='"$(VERSION)"' $(SS_CFLAGS) -c -o $@ $<
+	    -DCRFIX_VERSION='"$(VERSION)"' $(SS_CFLAGS) -c -o $@ $<
 
 build/dlsym_trampoline.o: src/dlsym_trampoline.S
 	@mkdir -p build
@@ -67,7 +65,7 @@ $(CB_LIB): $(CB_SRCS) src/clipbridge/clipbridge.h $(CB_GEN_H) $(CB_GEN_C)
 	    $(LDFLAGS) -shared -Wl,-z,defs -o $@ $(CB_SRCS) $(CB_GEN_C) $(CB_LIBS) -lpthread -ldl
 
 # 截图修复：同样用 X11 与 wayland-client（ext-image-copy-capture，退回 wlr-screencopy）；
-# KDE 下 fork/exec helper 调 KWin ScreenShot2。ext-foreign-toplevel-list 只是 capture-source 引用到的接口定义
+# ext-foreign-toplevel-list 只是 capture-source 引用到的接口定义
 SH_PROTOCOLS := ext-image-capture-source-v1 ext-image-copy-capture-v1 ext-foreign-toplevel-list-v1 \
                 wlr-screencopy-unstable-v1 xdg-output-unstable-v1
 SH_GEN_H   := $(SH_PROTOCOLS:%=build/%-client-protocol.h)
@@ -75,16 +73,7 @@ SH_GEN_C   := $(SH_PROTOCOLS:%=build/%-protocol.c)
 
 $(SH_LIB): src/qq-screenshot.c $(SH_GEN_H) $(SH_GEN_C)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -Wall -Wextra -Ibuild $(CB_CFLAGS) \
-	    -DQQ_SCREENSHOT_HELPER='"$(LIBEXECDIR)/$(SHOT_HELPER)"' \
 	    $(LDFLAGS) -shared -Wl,-z,defs -o $@ src/qq-screenshot.c $(SH_GEN_C) $(CB_LIBS) -ldl
-
-# KDE 截图 helper：替 QQ 调 KWin ScreenShot2（kde 模式）或 portal 截图（portal 模式）；
-# 配套 .desktop 声明受限接口（KWin 按 exe 路径鉴权）
-$(SHOT_HELPER): src/qq-screenshot-helper.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Wall -Wextra $(SS_CFLAGS) -o $@ $< $(SS_LIBS) -lz
-
-$(SHOT_HELPER_DESKTOP): $(SHOT_HELPER_DESKTOP).in
-	sed -e 's|@LIBEXECDIR@|$(LIBEXECDIR)|g' $< > $@
 
 # 共享边框隐藏：socket 层拦 Wayland 出站流量，把「屏幕共享」全屏边框的 buffer 摘掉
 $(BF_LIB): src/qq-borderfix.c
@@ -100,8 +89,6 @@ install: all
 	install -Dm755 $(CB_LIB)         $(DESTDIR)$(LIBEXECDIR)/$(CB_LIB)
 	install -Dm755 $(SH_LIB)         $(DESTDIR)$(LIBEXECDIR)/$(SH_LIB)
 	install -Dm755 $(BF_LIB)         $(DESTDIR)$(LIBEXECDIR)/$(BF_LIB)
-	install -Dm755 $(SHOT_HELPER)     $(DESTDIR)$(LIBEXECDIR)/$(SHOT_HELPER)
-	install -Dm644 $(SHOT_HELPER_DESKTOP) $(DESTDIR)$(DATADIR)/applications/$(SHOT_HELPER_DESKTOP)
 	install -Dm755 $(CMD)            $(DESTDIR)$(BINDIR)/$(CMD)
 	install -Dm644 $(CMD).desktop    $(DESTDIR)$(DATADIR)/applications/$(CMD).desktop
 	install -Dm644 README.md         $(DESTDIR)$(DOCDIR)/README.md
@@ -109,7 +96,7 @@ install: all
 	install -Dm644 LICENSE           $(DESTDIR)$(DATADIR)/licenses/$(NAME)/LICENSE
 
 clean:
-	rm -rf build src/*.o $(SS_LIB) $(CB_LIB) $(SH_LIB) $(BF_LIB) $(SHOT_HELPER) $(SHOT_HELPER_DESKTOP) $(CMD)
+	rm -rf build src/*.o $(SS_LIB) $(CB_LIB) $(SH_LIB) $(BF_LIB) $(CMD)
 
 print-version:
 	@echo $(VERSION)

@@ -1,9 +1,7 @@
 *.o
 *.so
 build/
-/linuxqq-wayland-fix
-/qq-screenshot-helper
-/qq-screenshot-helper.desktop
+/qq-crfix
 /dist/
 /packaging/arch/src/
 /packaging/arch/pkg/

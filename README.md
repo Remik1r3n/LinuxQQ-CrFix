@@ -1,199 +1,128 @@
+# Linux QQ ChromeOS Fix
 
-# linuxqq-wayland-fix
+让 Linux QQ 在 **ChromeOS 的 Linux 容器（Crostini）** 里以原生 Wayland 舒服地运行。
 
-修复 Linux QQ 以 **Wayland** 运行时的屏幕分享、剪贴板、截图、麦克风声音延迟等等异常。
+- 命令：`qq-crfix`
+- 应用菜单项：**QQ (CrFix)**
+- 基于 [SHORiN-KiWATA/linuxqq-wayland-fix](https://github.com/SHORiN-KiWATA/linuxqq-wayland-fix) 改造。上游面向普通 Linux Wayland 桌面，本项目只针对 Crostini。
 
->一分钟视频介绍：[B 站](https://www.bilibili.com/video/BV1MKa66VEPS)
+警告：Vibe Coding
 
-目前以 Wayland 模式运行 QQ 会有以下几个异常：
+## 这个项目做了什么
 
-- 剪贴板
-  
-  Wayland QQ 依旧使用 X11 的剪贴板，导致 QQ 里复制的内容粘贴不到外面，外面复制的内容也粘贴不到 QQ 里。
+| 改动 | 说明 |
+| --- | --- |
+| 默认启动参数 | `--ozone-platform=wayland --enable-wayland-ime --wayland-text-input-version=1`。前两个参数打开 Wayland IME，最后一个把 Chromium 拉回 ChromeOS 认得的 text-input-v1 |
+| 删掉 `QQ_WAYLAND_FIX_ANGLE` | 连同全部相关功能一起删除：Vulkan ICD 探测、`--use-angle=vulkan/swiftshader`、`VK_DRIVER_FILES` 混合显卡限定、GPU 进程崩溃后的自动回退监视、`~/.cache/.../angle-vulkan-failed` 记录、`--doctor` 里的 ANGLE 检查，以及文档中的对应章节。启动器**不再给 QQ 传任何 ANGLE/Vulkan 参数，也不设置 `VK_DRIVER_FILES`** |
+| 改名 | 项目 **Linux QQ ChromeOS Fix**；可执行文件 `qq-crfix`；桌面项 `QQ (CrFix)`；日志、缓存、环境变量前缀统一为 `qq-crfix` / `QQ_CRFIX_*` |
+| 删掉桌面环境专用功能 | KDE 的 KWin `ScreenShot2`、GNOME 的 portal `Screenshot` 两条截图路径，连同 `qq-screenshot-helper` 可执行文件与它的 `.desktop` 权限声明；KDE 下自动禁用剪贴板修复、合成器版本探测（niri / Hyprland / KWin / GNOME Shell）、niri IPC、`--doctor` 里按桌面分流的检查，以及相关环境变量和文档章节 |
+| 精简后保留 | 上游四个注入库中与具体桌面无关的通用部分（屏幕共享与共享电脑声音、剪贴板、截图防闪退、窗口边框）、`--doctor` 自检、`install` / `uninstall` 快捷方式覆盖 |
 
-  >修复前
+上游的功能演示（录制于普通 Linux Wayland 桌面，不是 Crostini）：[剪贴板](./pics/剪贴板-after.gif)、[屏幕共享](./pics/屏幕分享异常演示-before.gif)、[截图](./pics/截图闪退-before.gif)。
 
-  ![](./pics/剪贴板-before.gif)
-  
-  通常的解决办法是做一个剪贴板双向同步脚本。本项目没有使用类似[Linuxqq Clipsync](https://github.com/SHORiN-KiWATA/linuxqq-clipsync)的同步方式，而是在 QQ 进程里接管 QQ 的剪贴板调用，让它直接读写 Wayland 剪贴板（data-control 协议），不再经过 X11 剪贴板：表情等 QQ 自己的格式也能在多个 QQ 账号之间复制粘贴，不会和 X11 程序或其它 QQ 进程互相争抢，而且仅在 QQ 开启时生效。
-
-  >修复后
-
-  ![](./pics/剪贴板-after.gif)
-
-- 屏幕分享
-
-  在 Wayland QQ 尝试进行屏幕分享会提示 Wayland 下无法使用此功能，或者出现循环打开启动器的情况，总之是无法使用。
-
-  >修复前
-
-  ![](./pics/屏幕分享异常演示-before.gif)
-
-  我利用 Opus 5.5 部署 [littlekan233/qq-wayland-screenshare](https://github.com/littlekan233/qq-wayland-screenshare) 项目时意外发现 QQ 居然有一套近乎完整的 Wayland 屏幕分享，只是缺少了选择器的部分。于是让 Opus 5.5 补全了这部分，屏幕分享就可用了。走的是 PipeWire 加 Portal 的“正规”路径，性能开销极低。
-
-  >修复后
-
-  https://github.com/user-attachments/assets/47fc8378-0bf7-4ef8-ac37-bfc1389dcf22
-
-- 截图
-
-  Wayland QQ 点击截图键会迅速闪退。
-
-  >修复前
-
-  ![](./pics/截图闪退-before.gif)
-
-  这个仓库拦截了 QQ 截图操作，并将其改为用合成器的截屏协议（`ext-image-copy-capture`，没有时用 `wlr-screencopy`）截取显示输出。
-
-  https://github.com/user-attachments/assets/36b6b031-19d0-4af2-9def-4e1a63a7ce11
-  
->除此之外还有更多异常。详细的逆向分析和原理见由 Deepseek V4.1 Flash 和 Opus 5.5 排查生成的：[docs/原理详解.md](docs/原理详解.md)。
-
-## 注意事项和兼容性
-
-XWayland 和各个桌面的 xdg-desktop-portal 需要正常工作，以下是兼容性调查表格。
-
-测试环境：Arch Linux + 7940h + 780M，纯净安装 Niri、Hyprland、KDE Plasma、GNOME 最新版本
-
-| 修复内容 | Niri | Hyprland | KDE Plasma | GNOME |
-| -------- | ---- | -------- | ---------- | ----- |
-| 屏幕共享 | ✅    | ✅        | ✅          | ✅     |
-| 剪贴板   | ✅    | ✅        | ✅          | ✅     |
-| 截图     | ✅    | ✅        | ✅          | ✅     |
+> 这几个注入库依赖合成器提供的 `ext-data-control` / `ext-image-copy-capture` / `wlr-screencopy` 等协议和 `xdg-desktop-portal`；剩下的代码都是运行时按协议探测的通用逻辑，不再绑定任何桌面环境。Crostini 的 Sommelier 是否提供这些协议取决于 ChromeOS 版本，请以 `qq-crfix --doctor` 的结果为准；**本项目的核心目标（原生 Wayland + 输入法 + 不花屏）不依赖这些协议**。
 
 ## 安装
 
-QQ 本体需另外安装（[官方下载](https://im.qq.com/linuxqq/)）。
+QQ 本体需要另外安装（[官方 deb](https://im.qq.com/linuxqq/)）。目前只支持原生的 `linuxqq` 和 AppImage 版 `linuxqq-appimage`，Flatpak 等沙盒版不支持。
 
-这个项目目前仅支持原生的 `linuxqq` 和 Appimage 版的 `linuxqq-appimage`，Flatpak之类的沙盒版暂不支持。
+Crostini 里先看容器是 Debian 几：
 
-- Arch Linux
+```bash
+cat /etc/debian_version
+```
 
-  ```bash
-  paru -S linuxqq-wayland-fix-git
-  ```
+### 发行包（推荐）
 
-- Debian 12+ / Ubuntu 24.04+ / Fedora 43+ / Arch
+从 [Releases](https://github.com/Remik1r3n/LinuxQQ-CrFix/releases) 下载对应的包：
 
-  从 [Releases](https://github.com/SHORiN-KiWATA/linuxqq-wayland-fix/releases) 下载对应的包：
+```bash
+sudo apt install ./qq-crfix_*debian12_amd64.deb   # Debian 12 (bookworm) 容器
+sudo apt install ./qq-crfix_*debian13_amd64.deb   # Debian 13 (trixie) 容器
+sudo dnf install ./qq-crfix-*.fc43.x86_64.rpm     # Fedora 43+
+sudo pacman -U ./qq-crfix-*.pkg.tar.zst           # Arch（需先装好 linuxqq）
+```
 
-  ```bash
-  sudo apt install ./linuxqq-wayland-fix_*debian12_amd64.deb     # Debian 12+
-  sudo apt install ./linuxqq-wayland-fix_*ubuntu24.04_amd64.deb  # Ubuntu 24.04+
-  sudo dnf install ./linuxqq-wayland-fix-*.fc43.x86_64.rpm         # Fedora 43+
-  sudo pacman -U ./linuxqq-wayland-fix-*.pkg.tar.zst              # Arch（需先装好 linuxqq）
-  ```
+### 源码
 
-- 源码
+依赖：C 编译器、make、pkg-config、wayland-scanner，以及 glib2（gio）、libX11、libwayland-client 的开发文件；libpulse、libpipewire-0.3 的开发文件（只用头文件，运行时不依赖）。
 
-    依赖：C 编译器、make、pkg-config、wayland-scanner，以及 glib2（gio）、libX11、libwayland-client 的开发文件；libpulse、libpipewire-0.3 的开发文件（只用头文件，运行时不依赖）。
-  
-    ```bash
-    make
-    sudo make install PREFIX=/usr
-    ```
-  
-- NixOS（Flake）
-  
-  本仓库自带 `flake.nix`，提供 `packages.default`、`overlays.default`、`nixosModules.default` 和 `homeModules.default`。NixOS 用户推荐直接用模块：
-  
-  ```nix
-  {
-    inputs.linuxqq-wayland-fix.url = "github:SHORiN-KiWATA/linuxqq-wayland-fix";
-  
-    outputs = { self, nixpkgs, linuxqq-wayland-fix, ... }: {
-      nixosConfigurations.host = nixpkgs.lib.nixosSystem {
-        modules = [
-          linuxqq-wayland-fix.nixosModules.default
-          {
-            nixpkgs.config.allowUnfree = true; # pkgs.qq 是 unfree
-            programs.linuxqq-wayland-fix.enable = true;
-          }
-        ];
-      };
+```bash
+make
+sudo make install PREFIX=/usr
+```
+
+### Nix / NixOS（可选，非 Crostini 场景）
+
+仓库自带 `flake.nix`，提供 `packages.default`、`overlays.default`、`nixosModules.default`、`homeModules.default`。模块选项改名为 `programs.qq-crfix`：
+
+```nix
+{
+  inputs.qq-crfix.url = "github:Remik1r3n/LinuxQQ-CrFix";
+
+  outputs = { self, nixpkgs, qq-crfix, ... }: {
+    nixosConfigurations.host = nixpkgs.lib.nixosSystem {
+      modules = [
+        qq-crfix.nixosModules.default
+        {
+          nixpkgs.config.allowUnfree = true; # pkgs.qq 是 unfree
+          programs.qq-crfix.enable = true;
+        }
+      ];
     };
-  }
-  ```
-  
-  `enable = true` 会装好修复包和 `pkgs.qq`，并把 QQ 的路径告诉启动器；之后从应用菜单打开「**QQ（Wayland修复版）**」即可，自检用 `linuxqq-wayland-fix --doctor`。只想装修复包：`programs.linuxqq-wayland-fix.qq = null`。
-
-  Home Manager 用户用 `homeModules.default`，选项和上面完全一样，只是包装进用户 profile：
-
-  ```nix
-  {
-    inputs.linuxqq-wayland-fix.url = "github:SHORiN-KiWATA/linuxqq-wayland-fix";
-    inputs.home-manager.url = "github:nix-community/home-manager";
-    inputs.home-manager.inputs.nixpkgs.follows = "nixpkgs";
-
-    outputs = { self, nixpkgs, home-manager, linuxqq-wayland-fix, ... }: {
-      homeConfigurations.user = home-manager.lib.homeManagerConfiguration {
-        pkgs = nixpkgs.legacyPackages.x86_64-linux;
-        modules = [
-          linuxqq-wayland-fix.homeModules.default
-          {
-            nixpkgs.config.allowUnfree = true; # pkgs.qq 是 unfree
-            programs.linuxqq-wayland-fix.enable = true;
-          }
-        ];
-      };
-    };
-  }
-  ```
-
-  Home Manager 装不了系统级的 `xdg-desktop-portal`；如果它是通过 NixOS 模块接入的，系统里没开 `xdg.portal.enable` 时模块会给出提醒。
-  
-  不用模块的话：
-  
-  ```bash
-  nix build github:yigexuanmu/linuxqq-wayland-fix-nix
-  nix develop   # 进开发环境后直接 make
-  ```
-  
-  打包细节都在 `nix/package.nix`：NixOS 缺少的库搜索路径、EGL 平台、Vulkan ICD 路径等都在构建期补齐，不改动上游的任何文件。
-  
-
-## 使用方法
-
-安装后完全退出QQ（包括托盘），然后从应用菜单打开「**QQ（Wayland修复版）**」，一切应当开箱即用，如果有问题先自行排查，或者用 AI 进行排查，然后提交仓库 Issues。
-
-下面这条命令可以用于检查运行环境：
-
-```
-linuxqq-wayland-fix --doctor
+  };
+}
 ```
 
-想让应用菜单里原来的「QQ」直接启动修复版，可以覆盖原生 QQ 快捷方式（「QQ（Wayland修复版）」会同时隐藏）：
+`enable = true` 会装好修复包和 `pkgs.qq`；只想装修复包：`programs.qq-crfix.qq = null`。Home Manager 用户改用 `homeModules.default`，选项相同。
 
+## 使用
+
+安装后**完全退出 QQ（包括托盘）**，再从应用菜单打开「**QQ (CrFix)**」，或者直接在终端跑：
+
+```bash
+qq-crfix
 ```
-linuxqq-wayland-fix install     # 覆盖原生 QQ 快捷方式
-linuxqq-wayland-fix uninstall   # 恢复原样
+
+ChromeOS 输入法无需在容器里装 Fcitx：确保 ChromeOS 系统层面的中文输入法已经启用，在 QQ 输入框里用系统快捷键切换即可。`--doctor` 会检查合成器有没有提供 `text-input-v1`。
+
+其他命令：
+
+```bash
+qq-crfix --doctor      # 检查运行环境与当前 QQ 版本
+qq-crfix --version     # 版本
+qq-crfix --help        # 完整参数与环境变量说明
+qq-crfix install       # 覆盖原生 QQ 快捷方式，让菜单里的「QQ」也启动修复版（会隐藏「QQ (CrFix)」）
+qq-crfix uninstall     # 恢复原样
 ```
 
-只在 `~/.local/share/applications/` 里放同名快捷方式，不改动系统文件。卸载本工具前请先运行 `uninstall`，否则菜单里的 QQ 会消失；QQ 更新后如果原快捷方式变了（名称、图标等），再运行一次 `install` 即可。
+`install` 只在 `~/.local/share/applications/` 放快捷方式，不改动系统文件；卸载本项目前请先运行 `uninstall`。
 
-## 已知问题或解决办法
+### 环境变量
 
-- 使用 Easy Effects 时，需在它的输入和输入排除名单里都加上 `TRAE`，否则 QQ 一开共享就会崩；
-- 流畅度取决于 QQ 自己的编码，大概只有 20 帧左右；
-- 观看别人共享时出现花屏或者显示不全的情况可以尝试调整`QQ_WAYLAND_FIX_ANGLE`环境变量的值，具体可用的值通过`linuxqq-wayland-fix -h`命令查看。详见 [原理详解](docs/原理详解.md#附观看共享花屏)。
+| 变量 | 作用 |
+| --- | --- |
+| `QQ_CRFIX_QQ` | QQ 的启动命令（默认先找 PATH 里的 `linuxqq`，再找 `/opt/QQ/qq`） |
+| `QQ_CRFIX_LOG` | 日志文件（默认 `$XDG_RUNTIME_DIR/qq-crfix.log`） |
+| `QQ_CRFIX_IME_DISABLE=1` | 只关掉两个 IME 参数（排查用），`--ozone-platform=wayland` 仍保留 |
 
-详细说明见 [常见问题与排错](docs/常见问题与排错.md)。
+上游注入库自己的排查开关（`QQ_WL_NATIVE_DISABLE`、`QQ_CLIPBOARD_FIX_DISABLE`、`QQ_SCREENSHOT_FIX_DISABLE`、`QQ_BORDER_FIX_DISABLE` 等）名称不变，完整列表见 [常见问题与排错](docs/常见问题与排错.md)。`qq-crfix --help` 会列出常用的几个。
 
-## 赞助
+## 常见问题
 
-如果这个项目帮到了你，欢迎请我喝杯咖啡 ☕ 你的支持会让它持续更新下去。
+- **QQ 里打不了中文**：先跑 `qq-crfix --doctor` 看有没有 `text-input-v1`；确认 QQ 是从「QQ (CrFix)」启动的（旧 QQ 要连托盘一起退干净）；ChromeOS 系统输入法要处于启用状态。切换输入法的快捷键若被 ChromeOS 抢走，需要给 Sommelier 配 `SOMMELIER_ACCELERATORS` 放行。
+- **整个 QQ 花屏 / 显示不全**：确认没有手动给 QQ 传 `--use-angle=*`、`--enable-features=Vulkan` 或 `VK_DRIVER_FILES`，也没有残留上游 `linuxqq-wayland-fix` 的启动器在启动 QQ。本项目永远不会选 Vulkan 后端。
+- **屏幕共享、剪贴板、截图仍异常**：这些是继承来的修复，依赖合成器协议和 portal，跑一下 `qq-crfix --doctor`；Crostini 的 Sommelier 不提供相应协议时，这几项无法生效，详见 [常见问题与排错](docs/常见问题与排错.md)。
+- **截图是黑图**：Sommelier 不提供截屏协议时，截图库只能给黑图兜底（按截图键不会闪退）。本项目已删掉 KDE / GNOME 的专用截图路径，没有别的开关能让它出图。
 
-<img src="https://raw.githubusercontent.com/SHORiN-KiWATA/.github/main/images/wechat.jpg" width="200" alt="微信赞赏码"> <img src="https://raw.githubusercontent.com/SHORiN-KiWATA/.github/main/images/alipay.png" width="134" alt="支付宝收款码">
-
-手机上看可以打开 [赞助页](https://github.com/SHORiN-KiWATA/.github/blob/main/SPONSOR.md)，支付宝能直接点链接付款。
+更完整的原理与逆向分析见 [docs/原理详解.md](docs/原理详解.md)（沿袭上游，已去掉 ANGLE/Vulkan 与 KDE/GNOME 专用截图章节）。
 
 ## 致谢
 
-[littlekan233/qq-wayland-screenshare](https://github.com/littlekan233/qq-wayland-screenshare) [xuwd1/wemeet-wayland-screenshare](https://github.com/xuwd1/wemeet-wayland-screenshare)：「截屏中转」思路的先行者。本项目采用了不同的方法，不包含它们的代码。
+上游 [SHORiN-KiWATA/linuxqq-wayland-fix](https://github.com/SHORiN-KiWATA/linuxqq-wayland-fix)
 
-[Linux Do](https://linux.do/) 中文 Linux 社区。
+腾讯 Workbuddy 送的免费鸡蛋
 
 ## 许可证
 
-MIT。`protocol/` 下的协议描述文件保留其原有版权声明。
-
+MIT。保留上游版权声明；`protocol/` 下的协议描述文件保留其原有版权声明。

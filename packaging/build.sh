@@ -4,7 +4,7 @@
 set -euo pipefail
 
 kind=$1 label=$2 version=$3
-pkg=linuxqq-wayland-fix
+pkg=qq-crfix
 root=$(cd "$(dirname "$0")/.." && pwd)
 dist=$root/dist
 mkdir -p "$dist"
@@ -22,16 +22,19 @@ deb)
 Package: $pkg
 Version: $version-1~$label
 Architecture: $arch
-Maintainer: Shorin <shorin@example.com>
+Maintainer: Remik1r3n <remik1r3n@users.noreply.github.com>
 Depends: libc6 (>= 2.34), libglib2.0-0t64 | libglib2.0-0, libx11-6, libwayland-client0
 Recommends: linuxqq, xdg-desktop-portal
+Conflicts: linuxqq-wayland-fix
 Section: net
 Priority: optional
-Homepage: https://github.com/SHORiN-KiWATA/linuxqq-wayland-fix
-Description: Fix Linux QQ screen sharing, device audio and clipboard on Wayland
- Fixes Linux QQ on Wayland: screen sharing does not work, shared device
- audio is silent, and copy/paste between QQ and other apps is broken.
- Open "QQ（Wayland修复版）" from the application menu.
+Homepage: https://github.com/Remik1r3n/LinuxQQ-CrFix
+Description: Linux QQ ChromeOS Fix - run Linux QQ comfortably on Crostini
+ Starts QQ with native Wayland and ChromeOS IME (text-input-v1) support,
+ and never selects an ANGLE/Vulkan backend (Crostini's virtual GPU makes
+ QQ render garbage with Vulkan). Also ships the upstream Wayland fixes
+ for screen sharing, clipboard, screenshot and shared-device audio.
+ Open "QQ (CrFix)" from the application menu.
 CTRL
     dpkg-deb --root-owner-group --build "$stage" "$dist/${pkg}_${version}-1~${label}_${arch}.deb"
     ;;
@@ -46,7 +49,7 @@ rpm)
     ;;
 arch)
     chown -R builder: "$root"
-    su builder -c "cd '$root/packaging/arch' && QQWL_VERSION='$version' makepkg -f -d --noconfirm"
+    su builder -c "cd '$root/packaging/arch' && CRFIX_VERSION='$version' makepkg -f -d --noconfirm"
     find packaging/arch -maxdepth 1 -name '*.pkg.tar.zst' ! -name '*-debug-*' -exec cp {} "$dist/" \;
     ;;
 *)

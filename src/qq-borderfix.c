@@ -11,9 +11,9 @@
  * 所以本库退到 socket 层：拦 libc 的 sendmsg，解析出站的 Wayland 线协议，
  * 把这条 surface 的 wl_surface.attach(buffer) 原地改写成 attach(NULL)，
  * 让它永远不映射；其它窗口一律不碰。
- * 注意（KWin 的 explicit sync）：KWin 6.x 上 Chromium 会走
+ * 注意（explicit sync）：合成器启用显式同步时 Chromium 会走
  * wp_linux_drm_syncobj_v1，同一个 commit 里还给 surface 设 acquire/release
- * point；只摘 buffer 会让 KWin 报「explicit sync is used, but no buffer is
+ * point；只摘 buffer 会让合成器报「explicit sync is used, but no buffer is
  * attached」协议错误并断开连接（QQ 随之崩溃）。这两条消息也会被原地改写成
  * 同长度的 attach(NULL)（见 IF_SYNCOBJ_SURFACE）。
  *
@@ -62,7 +62,7 @@
  * 1. 删除本文件 src/qq-borderfix.c；
  * 2. Makefile：删 BF_LIB 定义、$(BF_LIB) 构建规则、all / install / clean 里
  *    的 $(BF_LIB)；
- * 3. linuxqq-wayland-fix.in：删 BORDERFIX_LIB 定义、preload 循环里的
+ * 3. qq-crfix.in：删 BORDERFIX_LIB 定义、preload 循环里的
  *    "$BORDERFIX_LIB"、--doctor 的对应一行、帮助头部
  *    QQ_BORDER_FIX_DISABLE 注释；
  * 4. 删 README / docs 里相关段落。
@@ -506,7 +506,7 @@ static void handle_wire_request(int conn, uint8_t *msg, uint32_t id, uint32_t op
         if ((opcode == 1 || opcode == 2) && len == 12) {
             /* set_acquire_point / set_release_point（12 字节载荷，共 20 字节）。
              * 对应 wl_surface 的 buffer 已被我们摘掉（共享边框）时，保留显式同步点
-             * 会让 KWin 在 commit 时报「explicit sync is used, but no buffer is
+             * 会让合成器在 commit 时报「explicit sync is used, but no buffer is
              * attached」协议错误并断开连接，QQ 随之崩溃。把这条消息原地改写成
              * 同一 surface 的 attach(NULL,0,0)（同样 20 字节）：不产生同步状态，
              * 也不改变消息边界。 */

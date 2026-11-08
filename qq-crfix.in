@@ -1,29 +1,32 @@
 #!/bin/bash
-# linuxqq-wayland-fix @VERSION@ —— 修复 Linux QQ 在 Wayland 下的屏幕共享、共享电脑声音、剪贴板和截图闪退。
-# https://github.com/SHORiN-KiWATA/linuxqq-wayland-fix
+# Linux QQ ChromeOS Fix (qq-crfix) @VERSION@ —— 让 Linux QQ 在 ChromeOS Crostini 下以原生 Wayland 舒服地运行。
+# https://github.com/Remik1r3n/LinuxQQ-CrFix
 #
-#   linuxqq-wayland-fix [QQ 的参数...]   启动 QQ（应用菜单里的「QQ（Wayland修复版）」就是它）
-#   linuxqq-wayland-fix --doctor         检查环境与当前 QQ 版本是否兼容
-#   linuxqq-wayland-fix --version
-#   linuxqq-wayland-fix install          覆盖原生 QQ 快捷方式（原来的「QQ」改为启动修复版，隐藏「QQ（Wayland修复版）」）
-#   linuxqq-wayland-fix uninstall        取消覆盖，恢复原生 QQ 快捷方式
+#   qq-crfix [QQ 的参数...]   启动 QQ（应用菜单里的「QQ (CrFix)」就是它）
+#   qq-crfix --doctor         检查运行环境与当前 QQ 版本
+#   qq-crfix --version
+#   qq-crfix install          覆盖原生 QQ 快捷方式（原来的「QQ」改为启动修复版，隐藏「QQ (CrFix)」）
+#   qq-crfix uninstall        取消覆盖，恢复原生 QQ 快捷方式
+#
+# 默认给 QQ 加的参数：
+#   --ozone-platform=wayland --enable-wayland-ime --wayland-text-input-version=1
+#   ChromeOS 的输入法（crosim）只支持 text-input-v1，而 Chromium/Electron 默认会去要 v3；
+#   后两个参数让 QQ 走 Sommelier 认得的 v1，ChromeOS 原生输入法才能在 QQ 里打字。
+#
+# 本项目不会给 QQ 传 --use-angle=* 或设置 VK_DRIVER_FILES：
+#   Crostini 的 Vulkan（VirGL/Venus 虚拟 GPU）会让整个 QQ 花屏，任何 ANGLE/Vulkan 后端选择都没有意义。
 #
 # 环境变量：
-#   QQ_WAYLAND_FIX_QQ         QQ 的启动命令（默认先找 PATH 里的 linuxqq，再找 /opt/QQ/qq）
-#   QQ_WAYLAND_FIX_LOG        日志文件（默认 $XDG_RUNTIME_DIR/linuxqq-wayland-fix.log）
-#   QQ_WAYLAND_FIX_ANGLE      ANGLE 后端：auto（默认，检测到 Vulkan 时用 vulkan）| vulkan | swiftshader | off
-#                             auto 下 vulkan 画不出窗口时会自动改用默认后端重开，并记住这块显卡（QQ 更新后重试）
-#   VK_DRIVER_FILES           Vulkan 设备列表。混合显卡下不设时，启动器会自动限定到显示 GPU
-#                             （规避观看共享花屏，见 docs/原理详解.md#附观看共享花屏）；自己设了就不动
+#   QQ_CRFIX_QQ               QQ 的启动命令（默认先找 PATH 里的 linuxqq，再找 /opt/QQ/qq）
+#   QQ_CRFIX_LOG              日志文件（默认 $XDG_RUNTIME_DIR/qq-crfix.log）
+#   QQ_CRFIX_IME_DISABLE=1    不加 --enable-wayland-ime / --wayland-text-input-version=1（排查用）
 #   QQ_WL_NATIVE_DISABLE=1    关闭屏幕共享修复（排查问题用）
-#   QQ_WL_DMABUF=off|first    合成器只给 DMA-BUF 时（niri 26.04）共享画面用 LINEAR DMA-BUF；
+#   QQ_WL_DMABUF=off|first    合成器只给 DMA-BUF 时共享画面用 LINEAR DMA-BUF；
 #                             off 关掉，first 让它优先于共享内存（排查用）
 #   QQ_WL_FRAME_REUSE_DISABLE=1 关闭「复用采集纹理」（排查共享时内存增长用）
 #   QQ_VOICE_LATENCY_MSEC     语音通话麦克风的录音缓冲毫秒数（默认 30；0 关闭，回到 QQ 原本的 2 秒）
 #   QQ_CLIPBOARD_FIX_DISABLE=1 关闭剪贴板修复（排查问题用）
-#   QQ_CLIPBOARD_FIX_FORCE=1   强制启用剪贴板修复（KDE 上默认禁用，仅供测试）
 #   QQ_SCREENSHOT_FIX_DISABLE=1 关闭截图防闪退（排查问题用）
-#   QQ_SCREENSHOT_KDE=0       关闭 KDE 的 KWin ScreenShot2 截图路径（排查问题用）
 #   QQ_BORDER_FIX_DISABLE=1   关闭窗口修补（共享边框隐藏、截图覆盖层标题与全屏；排查问题用）
 
 set -u
@@ -34,15 +37,14 @@ SCREENSHARE_LIB="$LIBDIR/libqq-wl-portal.so"
 CLIPBOARD_LIB="$LIBDIR/libqq-clipbridge.so"
 SCREENSHOT_LIB="$LIBDIR/libqq-screenshot.so"
 BORDERFIX_LIB="$LIBDIR/libqq-borderfix.so"
-LOG="${QQ_WAYLAND_FIX_LOG:-${XDG_RUNTIME_DIR:-/tmp}/linuxqq-wayland-fix.log}"
+LOG="${QQ_CRFIX_LOG:-${XDG_RUNTIME_DIR:-/tmp}/qq-crfix.log}"
 QQ_CRASH_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/QQ/crash_files"
-CRASH_KEEP="${XDG_CACHE_HOME:-$HOME/.cache}/linuxqq-wayland-fix/crash"
-ANGLE_FALLBACK="${XDG_CACHE_HOME:-$HOME/.cache}/linuxqq-wayland-fix/angle-vulkan-failed"
+CRASH_KEEP="${XDG_CACHE_HOME:-$HOME/.cache}/qq-crfix/crash"
 USER_APPS="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 QQ_DESKTOP_IDS=(qq.desktop linuxqq.desktop)
-FIX_DESKTOP_ID=linuxqq-wayland-fix.desktop
-DESKTOP_MARK=X-LinuxQQ-Wayland-Fix
-DESKTOP_BACKUP=.linuxqq-wayland-fix.bak
+FIX_DESKTOP_ID=qq-crfix.desktop
+DESKTOP_MARK=X-LinuxQQ-CrFix
+DESKTOP_BACKUP=.qq-crfix.bak
 
 # QQ 崩溃时 Bugly 把调用栈写进 crash_files/tomb_*.txt，但 linuxqq 启动脚本每次都会清空这个目录。
 # 启动前把它们复制到缓存目录保存，--doctor 会列出最近的几次。
@@ -58,8 +60,8 @@ keep_crash_records() {
 
 # 优先用 QQ 包自己的 linuxqq 命令（linuxqq 读 qq-flags.conf，linuxqq-appimage 启动 AppImage）。
 find_qq() {
-    if [[ -n "${QQ_WAYLAND_FIX_QQ:-}" ]]; then
-        echo "$QQ_WAYLAND_FIX_QQ"
+    if [[ -n "${QQ_CRFIX_QQ:-}" ]]; then
+        echo "$QQ_CRFIX_QQ"
     elif command -v linuxqq >/dev/null 2>&1; then
         command -v linuxqq
     elif [[ -x /opt/QQ/qq ]]; then
@@ -91,17 +93,6 @@ qq_runtime_exe() {
         [[ -n "$exe" && -f "$exe" ]] && { echo "$exe"; return 0; }
     fi
     [[ -x /opt/QQ/qq ]] && echo /opt/QQ/qq
-}
-
-# 合成器版本（best-effort，拿不到就空）。
-compositor_version() {
-    local de="${XDG_CURRENT_DESKTOP:-}"
-    case "$de" in
-        *niri*) niri --version 2>/dev/null | head -1 | cut -d' ' -f1-2 ;;
-        *Hyprland*) hyprctl version 2>/dev/null | head -1 | cut -d' ' -f1-2 ;;
-        *KDE*) kwin_wayland --version 2>/dev/null | head -1 ;;
-        *GNOME*) gnome-shell --version 2>/dev/null | head -1 ;;
-    esac
 }
 
 # 已安装包的「名 版本」（best-effort，支持 pacman/dpkg/rpm），查不到输出空。
@@ -187,7 +178,7 @@ portal_conf_get() {
 # 规则同 xdg-desktop-portal 1.22：用户配置、系统配置、数据目录里每个目录取一份
 # <桌面>-portals.conf（没有就取 portals.conf），按顺序先看接口专门的那一行、再看 default=；
 # 都没选出来才退回 .portal 文件里旧的 UseIn，最后是 gtk 兜底。
-# niri 这类桌面没有 UseIn 是自己名字的后端，靠 niri-portals.conf 选后端（issue #42）。
+# 有些合成器没有以自己名字命中的 UseIn，靠 <桌面>-portals.conf 选后端。
 portal_backend() {
     local iface=org.freedesktop.impl.portal.ScreenCast
     local base conf de key name f
@@ -277,154 +268,9 @@ qq_runtime_dir() {
     esac
 }
 
-# 系统里有没有可用的 Vulkan 驱动（ICD 声明）。
-vulkan_available() {
-    local f
-    local env_files="${VK_DRIVER_FILES:-${VK_ICD_FILENAMES:-}}"
-    if [[ -n "$env_files" ]]; then
-        local IFS=':'
-        for f in $env_files; do
-            [[ -f "$f" ]] && return 0
-        done
-    fi
-    for f in /usr/share/vulkan/icd.d/*.json /etc/vulkan/icd.d/*.json \
-             "${XDG_DATA_HOME:-$HOME/.local/share}/vulkan/icd.d"/*.json; do
-        [[ -f "$f" ]] && return 0
-    done
-    return 1
-}
-
-# ANGLE 后端：auto（默认，检测到 Vulkan 就用 vulkan）| vulkan | swiftshader | off。
-# 部分设备上 Wayland + ANGLE 的 GLES 后端会把屏幕共享画面渲染花，
-# 换用 Vulkan 后端可避开；没有 Vulkan 时可以手动选 swiftshader（软件，慢）。
-angle_mode() {
-    case "${QQ_WAYLAND_FIX_ANGLE:-auto}" in
-        auto)
-            if vulkan_available && ! angle_vulkan_failed; then echo vulkan; else echo none; fi
-            ;;
-        vulkan | swiftshader) echo "${QQ_WAYLAND_FIX_ANGLE}" ;;
-        off | default | none | "") echo none ;;
-        *) echo none ;;
-    esac
-}
-
-# 显示 GPU 的设备目录：优先找有接通（connected）接口的 DRM card，取不到退回 boot_vga。
-display_gpu_dev() {
-    local c s
-    for c in /sys/class/drm/card[0-9]*; do
-        [[ -e "$c/device/vendor" ]] || continue
-        for s in "$c"/card*-*/status; do
-            if [[ -f "$s" && "$(cat "$s" 2>/dev/null)" == "connected" ]]; then
-                echo "$c/device"
-                return 0
-            fi
-        done
-    done
-    for c in /sys/bus/pci/devices/*/boot_vga; do
-        if [[ -f "$c" && "$(cat "$c" 2>/dev/null)" == "1" ]]; then
-            dirname "$c"
-            return 0
-        fi
-    done
-    return 1
-}
-
-display_gpu_vendor() {
-    local d
-    d=$(display_gpu_dev) || return 1
-    cat "$d/vendor"
-}
-
-# ANGLE Vulkan 在部分显卡上画不出窗口（issue #48：Intel 核显上 Skia 建不了 SkSurface，GPU 进程连崩，
-# 登录窗口始终不出来）。auto 模式遇到时会记下「显示 GPU + QQ 安装版本」，之后在这台机器上不再用 vulkan。
-# QQ 自带的 Chromium/ANGLE 只随安装包更新（热更新不换），所以取安装目录的版本；AppImage 取文件名。
-angle_fallback_key() {
-    local d gpu=unknown ver f
-    d=$(display_gpu_dev) && gpu="$(cat "$d/vendor"):$(cat "$d/device")"
-    ver=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' /opt/QQ/resources/app/package.json 2>/dev/null | head -1)
-    if [[ -z "$ver" ]]; then
-        for f in /opt/linuxqq-appimage/*.AppImage; do
-            [[ -f "$f" ]] && { ver=${f##*/}; break; }
-        done
-    fi
-    echo "gpu=$gpu qq=${ver:-unknown}"
-}
-
-# 这块显卡 + 这个 QQ 版本上 ANGLE Vulkan 失败过（QQ 更新后记录自然失效，会重新尝试）。
-angle_vulkan_failed() {
-    [[ -f "$ANGLE_FALLBACK" && "$(head -1 "$ANGLE_FALLBACK" 2>/dev/null)" == "$(angle_fallback_key)" ]]
-}
-
-# 混合显卡规避（见 docs/原理详解.md#附观看共享花屏）：只要 NVIDIA 的 Vulkan 设备可枚举，
-# Chromium/ANGLE 在双显卡下就会走坏路径，观看共享花屏。把 QQ 能看到的 Vulkan 设备
-# 限制到显示 GPU 的 ICD 即可规避。显示在 N 卡、用户自己设过、或没有非 NVIDIA ICD 时都不动。
-restrict_vulkan_icds() {
-    [[ -n "${VK_DRIVER_FILES:-}${VK_ICD_FILENAMES:-}" ]] && return 1
-    [[ "$(angle_mode)" == "vulkan" ]] || return 1
-    local vendor
-    vendor=$(display_gpu_vendor) || return 1
-    [[ "$vendor" != "0x10de" ]] || return 1
-    local icds=() f
-    for f in /usr/share/vulkan/icd.d/*.json /etc/vulkan/icd.d/*.json; do
-        [[ -f "$f" ]] || continue
-        grep -qi nvidia "$f" 2>/dev/null && continue
-        icds+=("$f")
-    done
-    (( ${#icds[@]} > 0 )) || return 1
-    local IFS=:
-    export VK_DRIVER_FILES="${icds[*]}"
-    return 0
-}
-
-process_alive() {
-    local st
-    st=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
-    st=${st##*) }
-    [[ "${st%% *}" != Z ]]
-}
-
-# 启动阶段的监视（后台运行；$1 是 QQ 主进程，即 exec 之前的启动器自己，其余是 QQ 的参数）：
-# 20 秒内 GPU 进程因为建不了 SkSurface 崩了两次以上，就记下这块显卡（angle_fallback_key），
-# 结束 QQ，改用默认后端重开。日志每次启动都会截断，所以直接数整个文件。
-watch_angle_vulkan() {
-    local qq_pid=$1 i preload=${LD_PRELOAD-}
-    shift
-    unset LD_PRELOAD # 注入库只给 QQ，这里的 sleep/awk 不需要
-    for ((i = 0; i < 40; i++)); do
-        sleep 0.5
-        process_alive "$qq_pid" || return 0
-        LC_ALL=C awk '/Unable to initialize SkSurface/ { s++ }
-                      /GPU process exited unexpectedly/ { g++ }
-                      END { exit !(s >= 1 && g >= 2) }' "$LOG" && break
-    done
-    (( i < 40 )) || return 0
-
-    mkdir -p "${ANGLE_FALLBACK%/*}" && angle_fallback_key > "$ANGLE_FALLBACK"
-    echo "=== linuxqq-wayland-fix: ANGLE Vulkan 画不出窗口（GPU 进程反复崩溃），改用默认后端重开 QQ；已记录到 $ANGLE_FALLBACK"
-    kill -TERM "$qq_pid" 2>/dev/null
-    for ((i = 0; i < 50; i++)); do
-        process_alive "$qq_pid" || break
-        sleep 0.2
-    done
-    if process_alive "$qq_pid"; then
-        kill -KILL "$qq_pid" 2>/dev/null
-        sleep 1
-    fi
-    export LD_PRELOAD="$preload"
-    exec "$QQ" --ozone-platform=wayland "$@"
-}
-
-# KDE Plasma 自带 XWayland↔Wayland 剪贴板同步（KWin/Klipper），与我们的桥冲突会让 QQ 崩溃，
-# 所以 KDE 上默认不预加载剪贴板修复；QQ_CLIPBOARD_FIX_FORCE=1 可强制启用。
-clipboard_auto_disabled() {
-    [[ -z "${QQ_CLIPBOARD_FIX_FORCE:-}" ]] || return 1
-    [[ "${XDG_CURRENT_DESKTOP:-}" == *KDE* || -n "${KDE_FULL_SESSION:-}" ]]
-}
-
+# 剪贴板修复是否启用（只用于日志与自检显示；库自己也读 QQ_CLIPBOARD_FIX_DISABLE）。
 clipboard_state() {
-    if clipboard_auto_disabled; then
-        echo "off(kde)"
-    elif [[ -n "${QQ_CLIPBOARD_FIX_DISABLE:-}" && "${QQ_CLIPBOARD_FIX_DISABLE}" != 0 ]]; then
+    if [[ -n "${QQ_CLIPBOARD_FIX_DISABLE:-}" && "${QQ_CLIPBOARD_FIX_DISABLE}" != 0 ]]; then
         echo off
     else
         echo on
@@ -442,11 +288,6 @@ qq_version_dir() {
     elif [[ -d /opt/QQ/resources/app ]]; then
         echo /opt/QQ/resources/app
     fi
-}
-
-# qq-screenshot-helper.desktop 的位置：门户（GNOME）和 KWin（KDE）都靠它认调用者。
-screenshot_helper_desktop() {
-    system_desktop qq-screenshot-helper.desktop
 }
 
 # 系统里的某个 .desktop：先按 XDG_DATA_DIRS 找（与桌面环境的查找方式一致，跳过用户目录），
@@ -467,9 +308,9 @@ system_desktop() {
 # install / uninstall：覆盖原生 QQ 快捷方式。
 # 桌面环境对同名 .desktop 优先用 $XDG_DATA_HOME/applications 里的那份，所以在那里放：
 #   - QQ 包入口的副本，Exec 改成本启动器 —— 原来的「QQ」就启动修复版；
-#   - linuxqq-wayland-fix.desktop 的副本，加 NoDisplay=true —— 藏起「QQ（Wayland修复版）」，免得菜单里有两个 QQ。
+#   - qq-crfix.desktop 的副本，加 NoDisplay=true —— 藏起「QQ (CrFix)」，免得菜单里有两个 QQ。
 # QQ 包入口：linuxqq 和腾讯官方 deb/rpm 是 qq.desktop，linuxqq-appimage 是 linuxqq.desktop。
-# 写入的文件带 X-LinuxQQ-Wayland-Fix 标记，uninstall 只删带标记的；用户目录里原有的同名文件先改名备份，uninstall 时还原。
+# 写入的文件带 X-LinuxQQ-CrFix 标记，uninstall 只删带标记的；用户目录里原有的同名文件先改名备份，uninstall 时还原。
 # 副本带 TryExec：本工具被卸载后它不会变成点了没反应的入口，但桌面环境也不会退回 QQ 包的入口
 # （GLib 实测：用户目录的同名条目加载失败，整个 ID 就没了），所以卸载本工具前要先 uninstall。
 is_our_desktop() {
@@ -492,8 +333,8 @@ write_desktop() {
     awk -v kind="$kind" -v mark="$DESKTOP_MARK" '
         function extra() {
             if (kind == "override") {
-                print "Exec=linuxqq-wayland-fix %U"
-                print "TryExec=linuxqq-wayland-fix"
+                print "Exec=qq-crfix %U"
+                print "TryExec=qq-crfix"
             } else {
                 print "NoDisplay=true"
             }
@@ -522,7 +363,7 @@ install_desktop() {
         src=$(system_desktop "$id") && targets+=("$id=$src")
     done
     if [[ ${#targets[@]} -eq 0 ]]; then
-        echo "linuxqq-wayland-fix: 找不到 QQ 的快捷方式（${QQ_DESKTOP_IDS[*]}），确认已安装 linuxqq 或 linuxqq-appimage" >&2
+        echo "qq-crfix: 找不到 QQ 的快捷方式（${QQ_DESKTOP_IDS[*]}），确认已安装 linuxqq 或 linuxqq-appimage" >&2
         return 1
     fi
     mkdir -p "$USER_APPS" || return 1
@@ -537,9 +378,9 @@ install_desktop() {
     fi
     refresh_user_apps
     tick "菜单里的「QQ」改为启动修复版"
-    [[ $hidden -eq 1 ]] && tick "隐藏「QQ（Wayland修复版）」"
+    [[ $hidden -eq 1 ]] && tick "隐藏「QQ (CrFix)」"
     for b in "${backed[@]}"; do tick "备份原有的 $b"; done
-    echo "恢复原样：linuxqq-wayland-fix uninstall"
+    echo "恢复原样：qq-crfix uninstall"
 }
 
 uninstall_desktop() {
@@ -561,7 +402,7 @@ uninstall_desktop() {
     fi
     refresh_user_apps
     [[ $qq -eq 1 ]] && tick "菜单里的「QQ」恢复为原版"
-    [[ $shown -eq 1 ]] && tick "重新显示「QQ（Wayland修复版）」"
+    [[ $shown -eq 1 ]] && tick "重新显示「QQ (CrFix)」"
     for id in "${restored[@]}"; do tick "还原原有的 $id"; done
 }
 
@@ -571,11 +412,11 @@ doctor() {
     note() { printf '  \e[33m!\e[0m %s\n' "$*"; warn=$((warn + 1)); }
     bad()  { printf '  \e[31m✗\e[0m %s\n' "$*"; fail=$((fail + 1)); }
 
-    echo "linuxqq-wayland-fix $VERSION 自检"
+    echo "Linux QQ ChromeOS Fix (qq-crfix) $VERSION 自检"
     echo
     echo "[基础]"
     local qq; qq=$(find_qq)
-    [[ -n "$qq" ]] && pass "QQ 启动方式: $qq" || bad "找不到 QQ（linuxqq 或 /opt/QQ/qq），可用 QQ_WAYLAND_FIX_QQ 指定"
+    [[ -n "$qq" ]] && pass "QQ 启动方式: $qq" || bad "找不到 QQ（linuxqq 或 /opt/QQ/qq），可用 QQ_CRFIX_QQ 指定"
     local qqinst; qqinst=$(qq_installed)
     if [[ -n "$qqinst" ]]; then
         pass "QQ 安装: $qqinst"
@@ -586,20 +427,13 @@ doctor() {
     for id in "${QQ_DESKTOP_IDS[@]}"; do
         is_our_desktop "$USER_APPS/$id" && overridden+=("$(tilde "$USER_APPS/$id")")
     done
-    [[ ${#overridden[@]} -gt 0 ]] && pass "已覆盖原生 QQ 快捷方式: ${overridden[*]}（linuxqq-wayland-fix uninstall 恢复）"
+    [[ ${#overridden[@]} -gt 0 ]] && pass "已覆盖原生 QQ 快捷方式: ${overridden[*]}（qq-crfix uninstall 恢复）"
     [[ -r "$SCREENSHARE_LIB" ]] && pass "屏幕共享修复: $SCREENSHARE_LIB" || bad "找不到 $SCREENSHARE_LIB"
-    if clipboard_auto_disabled; then
-        note "剪贴板修复: KDE 默认禁用（Plasma 自带同步，QQ 剪贴板照常可用；QQ_CLIPBOARD_FIX_FORCE=1 强制启用）"
-    elif [[ -r "$CLIPBOARD_LIB" ]]; then
-        pass "剪贴板修复: $CLIPBOARD_LIB"
-    else
-        bad "找不到 $CLIPBOARD_LIB"
-    fi
+    [[ -r "$CLIPBOARD_LIB" ]] && pass "剪贴板修复: $CLIPBOARD_LIB" || bad "找不到 $CLIPBOARD_LIB"
     [[ -r "$SCREENSHOT_LIB" ]] && pass "截图防闪退: $SCREENSHOT_LIB" || bad "找不到 $SCREENSHOT_LIB"
-    # 截图链（wlroots 系 / niri / COSMIC 等）：靠合成器的截屏协议，ext-image-copy-capture 优先、
-    # wlr-screencopy 兜底。只在装了 wayland-info 时检查；COSMIC 只有 ext，0.2.21 及之前的库只认 wlr。
-    if [[ "${XDG_CURRENT_DESKTOP:-}" != *GNOME* && "${XDG_CURRENT_DESKTOP:-}" != *KDE* ]] &&
-        [[ -n "${WAYLAND_DISPLAY:-}" ]] && command -v wayland-info >/dev/null 2>&1; then
+    # 截图链：靠合成器的截屏协议，ext-image-copy-capture 优先、wlr-screencopy 兜底。
+    # Sommelier 可能两种都不提供；此时截图是黑图，但「不闪退」的兜底仍然有效。
+    if [[ -n "${WAYLAND_DISPLAY:-}" ]] && command -v wayland-info >/dev/null 2>&1; then
         local globals has_ext=0 has_wlr=0
         globals=$(wayland-info 2>/dev/null)
         [[ "$globals" == *"'ext_image_copy_capture_manager_v1'"* && "$globals" == *"'ext_output_image_capture_source_manager_v1'"* ]] && has_ext=1
@@ -611,53 +445,29 @@ doctor() {
         elif (( has_ext )); then
             bad "截图: 合成器只有 ext-image-copy-capture，这份 libqq-screenshot.so 不支持，截图会全黑，请升级本包"
         else
-            bad "截图: 合成器既没有 ext-image-copy-capture 也没有 wlr-screencopy，截图会全黑"
-        fi
-    fi
-    # 截图链（GNOME）：没有 Wayland 截屏协议，靠 helper 走门户。库里没有门户分支（0.2.10 之前的包）
-    # 或 helper 缺失时，截图会静默地全黑，日志里才有原因。KDE 走 KWin ScreenShot2，在后面单独检查。
-    if [[ "${XDG_CURRENT_DESKTOP:-}" == *GNOME* ]]; then
-        local sh_help="$LIBDIR/qq-screenshot-helper" sh_desk
-        if [[ -r "$SCREENSHOT_LIB" ]]; then
-            # 标记用门户路径的开关名：真正发起门户调用的是 helper 进程，库里没有 D-Bus 接口串。
-            # 实测：含门户路径的版本有这个串，0.2.10 之前的没有。
-            if grep -aq 'QQ_SCREENSHOT_PORTAL' "$SCREENSHOT_LIB"; then
-                pass "截图: libqq-screenshot.so 含 GNOME 门户分支"
-            else
-                bad "截图: 这份 libqq-screenshot.so 没有 GNOME 门户分支（0.2.10 之前的版本），截图会全黑，请升级本包"
-            fi
-        fi
-        [[ -x "$sh_help" ]] && pass "截图: helper 已安装（$sh_help）" \
-            || bad "截图: 缺 qq-screenshot-helper，截图会全黑（重装本包或 make install）"
-        if sh_desk=$(screenshot_helper_desktop); then
-            pass "截图: helper 的 .desktop 已安装（$sh_desk）"
-        else
-            note "截图: 缺 qq-screenshot-helper.desktop（门户用它认调用者）"
+            bad "截图: 合成器既没有 ext-image-copy-capture 也没有 wlr-screencopy，截图会全黑（不影响不闪退）"
         fi
     fi
     [[ -r "$BORDERFIX_LIB" ]] && pass "窗口修补（共享边框/截图覆盖层）: $BORDERFIX_LIB" || note "找不到 $BORDERFIX_LIB（共享边框会变成窗口、截图覆盖层不平铺）"
     [[ -n "${WAYLAND_DISPLAY:-}" ]] && pass "Wayland 会话: $WAYLAND_DISPLAY" || note "WAYLAND_DISPLAY 为空，不在 Wayland 会话里？"
     [[ -n "${DISPLAY:-}" ]] && pass "XWayland: $DISPLAY" || bad "DISPLAY 为空：QQ 的界面与剪贴板仍需要 XWayland"
-    case "$(angle_mode)" in
-        vulkan) pass "ANGLE 后端: vulkan（检测到 Vulkan，可规避观看共享花屏）" ;;
-        swiftshader) note "ANGLE 后端: swiftshader（软件渲染，较慢，由 QQ_WAYLAND_FIX_ANGLE 指定）" ;;
-        none)
-            if [[ "${QQ_WAYLAND_FIX_ANGLE:-auto}" == auto ]] && vulkan_available && angle_vulkan_failed; then
-                note "ANGLE 后端: 默认（vulkan 在这块显卡上画不出窗口，已自动改用默认后端；QQ 更新后会重新尝试，删除 $(tilde "$ANGLE_FALLBACK") 可立即重试）"
-            else
-                note "ANGLE 后端: 默认；若观看共享花屏，可设 QQ_WAYLAND_FIX_ANGLE=swiftshader（较慢）或改用 X11，见 docs/原理详解.md#附观看共享花屏"
-            fi
-            ;;
-    esac
-    if [[ "$(angle_mode)" == "vulkan" ]] && grep -qli nvidia /usr/share/vulkan/icd.d/*.json /etc/vulkan/icd.d/*.json 2>/dev/null; then
-        local dgv
-        dgv=$(display_gpu_vendor 2>/dev/null) || dgv=""
-        if [[ "$dgv" == "0x10de" ]]; then
-            note "混合显卡: 显示在 NVIDIA；观看共享若花屏，可试 QQ_WAYLAND_FIX_ANGLE=swiftshader（较慢）或改用 X11"
-        elif [[ -n "$dgv" ]]; then
-            pass "混合显卡: 启动时会自动把 QQ 的 Vulkan 限定到显示 GPU（规避观看共享花屏）"
+    # Crostini：ChromeOS 输入法（crosim）只认 text-input-v1，而 Chromium/Electron 默认要 v3。
+    if [[ -n "${QQ_CRFIX_IME_DISABLE:-}" && "${QQ_CRFIX_IME_DISABLE}" != 0 ]]; then
+        note "输入法参数: 已被 QQ_CRFIX_IME_DISABLE 关闭（ChromeOS 原生输入法在 QQ 里可能不可用）"
+    else
+        pass "输入法参数: --enable-wayland-ime --wayland-text-input-version=1（ChromeOS IME / text-input-v1）"
+    fi
+    if command -v wayland-info >/dev/null 2>&1; then
+        local wi_ime
+        wi_ime=$(wayland-info 2>/dev/null)
+        if grep -q zwp_text_input_manager_v1 <<< "$wi_ime"; then
+            pass "输入法协议: 合成器提供 text-input-v1（ChromeOS / Sommelier）"
+        else
+            note "输入法协议: 没看到 text-input-v1（不是 Crostini 的 Sommelier？ChromeOS 原生输入法可能用不了）"
         fi
     fi
+    # 不给 QQ 传任何 ANGLE/Vulkan 参数：Crostini 的虚拟 GPU 走 Vulkan 会让整个 QQ 花屏。
+    pass "渲染后端: QQ 默认（不传 --use-angle=*，也不设置 VK_DRIVER_FILES）"
 
     echo
     echo "[QQ 内部实现（QQ 更新后用来判断修复是否还适用）]"
@@ -719,15 +529,17 @@ doctor() {
     fi
 
     echo
-    echo "[桌面环境]"
-    local de="${XDG_CURRENT_DESKTOP:-}" st="${XDG_SESSION_TYPE:-未知}" cv
-    cv=$(compositor_version)
-    if [[ -z "$de" ]]; then
-        note "桌面环境: 无法识别（XDG_CURRENT_DESKTOP 为空，$st）"
-    elif [[ -n "$cv" ]]; then
-        pass "桌面环境: $de（$st, $cv）"
+    echo "[Crostini / Wayland 会话]"
+    local st="${XDG_SESSION_TYPE:-未知}"
+    if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+        pass "会话: ${WAYLAND_DISPLAY}（XDG_SESSION_TYPE=$st；启动器会给 QQ 设 x11）"
     else
-        pass "桌面环境: $de（$st）"
+        note "会话: XDG_SESSION_TYPE=$st，未检测到 WAYLAND_DISPLAY"
+    fi
+    if command -v pgrep >/dev/null 2>&1 && pgrep -x sommelier >/dev/null 2>&1; then
+        pass "Sommelier: 运行中（ChromeOS / Crostini）"
+    else
+        note "Sommelier: 未检测到（不是标准 Crostini 会话？）"
     fi
     if command -v busctl >/dev/null 2>&1; then
         local psvc pfile pvia pdbus pown pstate pdesc piface ptypes
@@ -755,14 +567,14 @@ doctor() {
                 else
                     pass "Portal: ${psvc:-xdg-desktop-portal} 运行中$pdesc"
                 fi
-            elif [[ "$piface" != *ScreenCast* && -n "${XDG_CURRENT_DESKTOP:-}" ]]; then
-                note "Portal: ${psvc:-xdg-desktop-portal} 运行中（没有为「${XDG_CURRENT_DESKTOP}」选出 ScreenCast 后端，屏幕共享不可用）"
+            elif [[ "$piface" != *ScreenCast* ]]; then
+                note "Portal: ${psvc:-xdg-desktop-portal} 运行中（没有选出 ScreenCast 后端，屏幕共享不可用）"
             else
                 pass "Portal: ${psvc:-xdg-desktop-portal} 运行中"
             fi
             pass "Portal 接口: $piface"
         else
-            bad "Portal: xdg-desktop-portal 不可用（屏幕共享、GNOME 截图修复将无法工作）"
+            bad "Portal: xdg-desktop-portal 不可用（屏幕共享无法工作）"
         fi
         ptypes=$(busctl --user get-property org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop \
                 org.freedesktop.portal.ScreenCast AvailableSourceTypes 2>/dev/null | awk '{print $2}')
@@ -771,34 +583,17 @@ doctor() {
     else
         note "没有 busctl，跳过 portal 检查"
     fi
-    if clipboard_auto_disabled; then
-        note "剪贴板：KDE Plasma 自带 XWayland 剪贴板同步，本修复已默认禁用（QQ 剪贴板照常可用）"
-    elif command -v wayland-info >/dev/null 2>&1; then
+    if command -v wayland-info >/dev/null 2>&1; then
         local wi; wi=$(wayland-info 2>/dev/null)
         if grep -q ext_data_control_manager_v1 <<< "$wi"; then
             pass "剪贴板：合成器支持 ext-data-control"
         elif grep -q zwlr_data_control_manager_v1 <<< "$wi"; then
             pass "剪贴板：合成器支持 wlr-data-control"
         else
-            bad "剪贴板：合成器不支持 data-control（GNOME 即是如此），剪贴板修复无法工作"
+            bad "剪贴板：合成器不支持 data-control，剪贴板修复无法工作"
         fi
     else
         note "没有 wayland-info，跳过剪贴板协议检查（安装 wayland-utils 可检查）"
-    fi
-    if [[ "${XDG_CURRENT_DESKTOP:-}" == *KDE* ]]; then
-        local kde_helper="$LIBDIR/qq-screenshot-helper" kde_desktop
-        kde_desktop=$(screenshot_helper_desktop)
-        if [[ ! -x "$kde_helper" ]]; then
-            note "截图：缺 $kde_helper（KDE 下截图会是黑图，重装本包）"
-        elif [[ -z "$kde_desktop" ]]; then
-            note "截图：找不到 qq-screenshot-helper.desktop，KWin 的权限检查会拒绝 ScreenShot2（重装本包）"
-        elif ! grep -q '^X-KDE-DBUS-Restricted-Interfaces=org\.kde\.KWin\.ScreenShot2$' "$kde_desktop"; then
-            note "截图：$kde_desktop 的受限接口声明格式不对（不能带结尾分号），KWin 会拒绝 ScreenShot2"
-        elif command -v busctl >/dev/null 2>&1 && ! busctl --user status org.kde.KWin.ScreenShot2 >/dev/null 2>&1; then
-            note "截图：找不到 org.kde.KWin.ScreenShot2 服务（KWin 版本过旧？）"
-        else
-            pass "截图：KDE ScreenShot2（helper + 权限声明）已就绪"
-        fi
     fi
     # Easy Effects 的排除名单在 [StreamInputs] / [StreamOutputs] 的 blocklist=（逗号分隔）。
     # 提到 TRAE 但键不是 blocklist 的行（如 exclude=）Easy Effects 不读，单独指出来，免得用户以为配过了。
@@ -843,7 +638,7 @@ doctor() {
     elif tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -q 'libqq-wl-portal.so'; then
         pass "QQ（PID $pid）已注入"
     else
-        bad "QQ（PID $pid）没有注入：请完全退出 QQ（含托盘），再从「QQ（Wayland修复版）」打开"
+        bad "QQ（PID $pid）没有注入：请完全退出 QQ（含托盘），再从「QQ (CrFix)」打开"
     fi
 
     echo
@@ -866,7 +661,7 @@ doctor() {
 
 case "${1:-}" in
     --doctor) doctor; exit $? ;;
-    --version) echo "linuxqq-wayland-fix $VERSION"; exit 0 ;;
+    --version) echo "Linux QQ ChromeOS Fix (qq-crfix) $VERSION"; exit 0 ;;
     install) install_desktop; exit $? ;;
     uninstall) uninstall_desktop; exit $? ;;
     --help|-h) sed -n '2,/^[^#]/s/^# \{0,1\}//p' "$0"; exit 0 ;;
@@ -874,13 +669,12 @@ esac
 
 QQ=$(find_qq)
 if [[ -z "$QQ" ]]; then
-    echo "linuxqq-wayland-fix: 找不到 QQ（linuxqq 或 /opt/QQ/qq），可用 QQ_WAYLAND_FIX_QQ 指定" >&2
+    echo "qq-crfix: 找不到 QQ（linuxqq 或 /opt/QQ/qq），可用 QQ_CRFIX_QQ 指定" >&2
     exit 1
 fi
 
 preload=""
 for lib in "$SCREENSHARE_LIB" "$CLIPBOARD_LIB" "$SCREENSHOT_LIB" "$BORDERFIX_LIB"; do
-    [[ "$lib" == "$CLIPBOARD_LIB" ]] && clipboard_auto_disabled && continue
     [[ -r "$lib" ]] && preload="${preload:+$preload:}$lib"
 done
 export LD_PRELOAD="$preload${LD_PRELOAD:+:$LD_PRELOAD}"
@@ -892,25 +686,19 @@ export LD_PRELOAD="$preload${LD_PRELOAD:+:$LD_PRELOAD}"
 export XDG_SESSION_TYPE=x11
 export MESA_SHADER_CACHE_DISABLE="${MESA_SHADER_CACHE_DISABLE:-true}"
 
-angle_arg=()
-case "$(angle_mode)" in
-    vulkan) angle_arg=(--use-angle=vulkan) ;;
-    swiftshader) angle_arg=(--use-angle=swiftshader) ;;
-esac
-
-# 混合显卡：把 QQ 能看到的 Vulkan 设备限定到显示 GPU（见 restrict_vulkan_icds）。
-icd_note="默认"
-if restrict_vulkan_icds; then
-    icd_note="${VK_DRIVER_FILES##*/}"
-    icd_note="${icd_note%_icd.json}"
+# 默认启动参数：原生 Wayland + ChromeOS 输入法。
+#   ChromeOS 的 crosim 只支持 text-input-v1，Chromium/Electron 默认会去要 v3，
+#   不显式指定版本，ChromeOS 原生输入法在 QQ 里就用不了。
+#   QQ_CRFIX_IME_DISABLE=1 只关掉这两个 IME 参数（排查用），--ozone-platform=wayland 仍保留。
+#   ANGLE/Vulkan 后端刻意一个都不传：Crostini 的虚拟 GPU 走 Vulkan 会让整个 QQ 花屏。
+ime_args=(--enable-wayland-ime --wayland-text-input-version=1)
+ime_state=on
+if [[ -n "${QQ_CRFIX_IME_DISABLE:-}" && "${QQ_CRFIX_IME_DISABLE}" != 0 ]]; then
+    ime_args=()
+    ime_state=off
 fi
 
 keep_crash_records
-{ echo "=== linuxqq-wayland-fix $VERSION $(date '+%F %T') $QQ $* angle=$(angle_mode) icd=$icd_note clipboard=$(clipboard_state)"; } >"$LOG" 2>/dev/null || LOG=/dev/null
+{ echo "=== qq-crfix $VERSION $(date '+%F %T') $QQ $* ime=$ime_state clipboard=$(clipboard_state)"; } >"$LOG" 2>/dev/null || LOG=/dev/null
 
-# auto 选了 vulkan 时盯住启动阶段（见 angle_fallback_key）。用双重 fork 脱离 QQ：
-# 监视进程不做 QQ 的子进程，退出时不会在 QQ 下面留僵尸。
-if [[ "${angle_arg[*]}" == --use-angle=vulkan && "${QQ_WAYLAND_FIX_ANGLE:-auto}" == auto && "$LOG" != /dev/null ]]; then
-    ( watch_angle_vulkan "$$" "$@" </dev/null >>"$LOG" 2>&1 & )
-fi
-exec "$QQ" --ozone-platform=wayland "${angle_arg[@]}" "$@" >>"$LOG" 2>&1
+exec "$QQ" --ozone-platform=wayland ${ime_args[@]+"${ime_args[@]}"} "$@" >>"$LOG" 2>&1

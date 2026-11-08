@@ -86,8 +86,8 @@ static int from_broadcast_core(const void *caller)
 
 /* ---------- 总开关 ---------- */
 
-#ifndef QQWL_VERSION
-#define QQWL_VERSION "dev"
+#ifndef CRFIX_VERSION
+#define CRFIX_VERSION "dev"
 #endif
 
 static char *lookup_env(const char *name);
@@ -419,7 +419,7 @@ static struct pw_core *wrap_connect_fd(struct pw_context *context, int fd,
                                        size_t user_data_size)
 {
     /* fd 其实是 QQ 传来的 X11 显示器编号的低 32 位，不能交给 PipeWire（会被关掉）。 */
-    LOG("v" QQWL_VERSION ": broadcast-core asked to connect fd=%d, opening portal",
+    LOG("v" CRFIX_VERSION ": broadcast-core asked to connect fd=%d, opening portal",
         (long)getpid(), fd);
 
     uint32_t node = UINT32_MAX;
@@ -539,7 +539,7 @@ struct stream_info {
     void *capture;
     uint32_t alloc_w, alloc_h;
     int reuse_logged;
-    /* 只给 DMA-BUF 的合成器（niri 26.04）用：走 QQ 已有的单平面 EGL 导入路径。 */
+    /* 只给 DMA-BUF 的合成器用：走 QQ 已有的单平面 EGL 导入路径。 */
     void *dmabuf_capture;
     int dmabuf_linear, dmabuf_ready, dmabuf_buffer_logged, dmabuf_invalidate;
 };
@@ -886,8 +886,7 @@ static int connect_linear_dmabuf(struct pw_stream *stream, int direction,
     }
     /*
      * PipeWire 按消费端（QQ）给的顺序挑第一个双方都接受的格式。LINEAR 排在原有格式后面，
-     * 给共享内存的合成器（KDE、GNOME、wlroots 系、新版 niri）照旧协商成共享内存，
-     * 只给 DMA-BUF 的（niri 26.04）才会落到它。
+     * 给共享内存的合成器照旧协商成共享内存，只给 DMA-BUF 的才会落到它。
      */
     int first = !strcmp(dmabuf_mode(), "first");
     const struct spa_pod *offers[128];
@@ -1343,10 +1342,10 @@ int pa_stream_connect_record(pa_stream *s, const char *dev,
 /*
  * QQ 主程序（Chromium 的 Wayland 后端）在发 xdg_surface.set_window_geometry 之前
  * 检查宽、高都不为 0，否则 int3; ud2 主动崩溃（issue #1）。显示器坐标不从 0 开始时
- * （如 Hyprland 单屏 position=1920x0），QQ 给共享相关的某个窗口算出的几何为空，
+ * （如单屏输出原点不是 0,0 时），QQ 给共享相关的某个窗口算出的几何为空，
  * 点「确定」开始共享就会闪退。最早由 @YoungJurry 在 #2 中定位。
  *
- * 不能只去掉检查：把 0 尺寸发给合成器，wlroots 和 niri 都会按协议报错并断开 QQ。
+ * 不能只去掉检查：把 0 尺寸发给合成器，多数合成器会按协议报错并断开 QQ。
  * 这里改的是崩溃桩：几何为空时直接返回，不发这个请求，合成器按窗口内容决定大小。
  *
  * QQ 3.2.34-53644 里这个函数在 qq+0x39f81c0：

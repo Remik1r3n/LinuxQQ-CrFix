@@ -1,11 +1,11 @@
-%global srcname linuxqq-wayland-fix
+%global srcname qq-crfix
 
-Name:           linuxqq-wayland-fix
+Name:           qq-crfix
 Version:        %{_ver}
 Release:        1%{?dist}
-Summary:        Fix Linux QQ screen sharing, device audio and clipboard on Wayland
+Summary:        Linux QQ ChromeOS Fix - run Linux QQ comfortably on ChromeOS Crostini
 License:        MIT
-URL:            https://github.com/SHORiN-KiWATA/%{srcname}
+URL:            https://github.com/Remik1r3n/LinuxQQ-CrFix
 Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  gcc
@@ -19,11 +19,14 @@ BuildRequires:  wayland-devel
 Requires:       glib2
 Recommends:     linuxqq
 Recommends:     xdg-desktop-portal
+Conflicts:      linuxqq-wayland-fix
 
 %description
-Fixes Linux QQ on Wayland: screen sharing does not work, shared device
-audio is silent, and copy/paste between QQ and other apps is broken.
-Open "QQ（Wayland修复版）" from the application menu.
+Starts QQ with native Wayland and ChromeOS IME (text-input-v1) support,
+and never selects an ANGLE/Vulkan backend: Crostini's virtual GPU makes
+QQ render garbage with Vulkan. Also ships the upstream Wayland fixes for
+screen sharing, clipboard, screenshot and shared-device audio.
+Open "QQ (CrFix)" from the application menu.
 
 %prep
 %autosetup
@@ -39,11 +42,10 @@ Open "QQ（Wayland修复版）" from the application menu.
 %license %{_datadir}/licenses/%{srcname}/LICENSE
 %doc %{_docdir}/%{srcname}/README.md
 %doc %{_docdir}/%{srcname}/docs
-%{_bindir}/linuxqq-wayland-fix
+%{_bindir}/qq-crfix
 %{_libdir}/%{srcname}/
-%{_datadir}/applications/linuxqq-wayland-fix.desktop
-%{_datadir}/applications/qq-screenshot-helper.desktop
+%{_datadir}/applications/qq-crfix.desktop
 
 %changelog
-* Thu Oct 01 2026 Shorin <shorin@example.com> - %{version}-1
-- See https://github.com/SHORiN-KiWATA/%{srcname}/releases
+* Sun Nov 08 2026 Remik1r3n <remik1r3n@users.noreply.github.com> - %{version}-1
+- See https://github.com/Remik1r3n/LinuxQQ-CrFix/releases
